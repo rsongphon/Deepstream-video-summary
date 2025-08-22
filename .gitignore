@@ -71,3 +71,6 @@ configs/local_*.txt
 configs/local_*.yaml
 configs/user_*.txt
 configs/user_*.yaml
+
+#Personal file
+push.txt
