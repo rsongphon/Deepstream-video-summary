@@ -1,0 +1,64 @@
+# Basic DeepStream Pipeline Configuration
+# This configuration file defines basic pipeline settings for video processing
+
+[pipeline]
+name=basic-video-pipeline
+enable_perf_measurement=1
+perf_measurement_interval_sec=5
+enable_debug=0
+pipeline_ready_timeout_sec=10
+pipeline_eos_timeout_sec=30
+
+[source]
+# Source configuration
+# type: 1=FILE_H264, 2=FILE_MP4, 3=URI_RTSP, 4=USB_CAMERA, 5=CSI_CAMERA, 6=URI_HTTP
+type=1
+uri=/opt/nvidia/deepstream/deepstream-7.1/samples/streams/sample_720p.h264
+gpu_id=0
+drop_frame_interval=0
+framerate_num=30
+framerate_den=1
+loop=0
+latency=200
+timeout=5000
+
+[streammux]
+# Stream multiplexer configuration
+batch_size=1
+width=1920
+height=1080
+gpu_id=0
+buffer_pool_size=4
+batched_push_timeout=40000
+enable_padding=0
+nvbuf_memory_type=0
+
+[sink]
+# Sink configuration
+# type: fake, file, display, rtmp
+type=fake
+sync=0
+async=1
+# location is only used for file sink
+location=./output/test_output.mp4
+
+# Performance and monitoring settings
+[performance]
+enable_measurement=1
+measurement_interval=5
+log_fps=1
+log_latency=1
+log_memory_usage=1
+
+# Debug settings
+[debug]
+enable_debug_dump=0
+debug_dump_dir=./debug_dumps
+export_pipeline_graph=1
+pipeline_graph_filename=basic_pipeline
+
+# Error handling
+[error_handling]
+auto_recover=1
+max_recovery_attempts=3
+recovery_timeout_sec=10

@@ -1,0 +1,73 @@
+# Build directories
+build/
+bin/
+lib/
+*.a
+*.so
+*.o
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+
+# Executables
+test_environment
+test_pipeline_basic
+deepstream-video-summary
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+debug_dumps/
+*.dot
+
+# Temporary files
+*.tmp
+*.temp
+core.*
+
+# Model files (typically large)
+models/triton_repo/*/1/*.onnx
+models/triton_repo/*/1/*.engine
+models/triton_repo/*/1/*.plan
+models/triton_repo/*/1/*.pb
+
+# Output files
+output/
+results/
+*.mp4
+*.h264
+*.mkv
+*.avi
+
+# Python bytecode (if any Python scripts added later)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Config overrides (keep templates, ignore user-specific configs)
+configs/local_*.txt
+configs/local_*.yaml
+configs/user_*.txt
+configs/user_*.yaml
