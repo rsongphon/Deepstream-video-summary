@@ -179,12 +179,19 @@ primary-gie:
 
 ### Tensor Output (tensor_output.csv)
 
-The application generates CSV output with extracted tensor data:
+The application generates CSV output with extracted raw tensor data from deep learning model inference:
 ```csv
-Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions
-Source_0,1,1,0,output_coverage/Sigmoid,3,1 1 16800
-Source_1,1,1,0,output_coverage/Sigmoid,3,1 1 16800
+Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions,RawTensorData
+Source_0,Batch_0,Frame_0,Layer_0,output_cov/Sigmoid:0,3,4 34 60 ,RAW_DATA:0.000002 0.000001 0.000001...
+Source_0,Batch_0,Frame_0,Layer_1,output_bbox/BiasAdd:0,3,16 34 60 ,RAW_DATA:-0.021642 0.347364 0.898623...
 ```
+
+**Key Features of Tensor Extraction:**
+- **Raw Numerical Data**: Extracts actual floating-point values from inference output tensors
+- **Multiple Data Types**: Supports FLOAT (case 0), HALF/FP16 (case 1), INT8 (case 2), INT32 (case 3)
+- **Smart Truncation**: Limits output to first 100 values per tensor to prevent massive files
+- **Host Buffer Access**: Uses `tensor_meta->out_buf_ptrs_host[i]` for proper tensor data retrieval
+- **Real-time Processing**: Extracts tensor data in real-time during inference pipeline execution
 
 ### Console Performance Metrics
 
@@ -218,6 +225,40 @@ Total throughput: 120.8 FPS
 2. **Tensor Processing**: Extend `tensor_extract_probe()` function
 3. **Output Formats**: Add custom output handlers
 4. **Display Options**: Modify optional display branch
+
+### Tensor Extraction Implementation Details
+
+The raw tensor extraction is implemented in the `tensor_extract_probe()` function with the following key technical details:
+
+**Buffer Access Method:**
+```c
+// Correct approach: Use host buffer pointers from tensor metadata
+void *tensor_buffer = tensor_meta->out_buf_ptrs_host[i];
+```
+
+**Data Type Handling:**
+```c
+switch (layer_info->dataType) {
+    case 0: /* FLOAT */
+        float *float_data = (float*)tensor_buffer;
+        // Process float values...
+    case 1: /* HALF/FP16 */
+        uint16_t *half_data = (uint16_t*)tensor_buffer;
+        // Process FP16 values...
+    case 2: /* INT8 */
+        int8_t *int8_data = (int8_t*)tensor_buffer;
+        // Process INT8 values...
+    case 3: /* INT32 */
+        int32_t *int32_data = (int32_t*)tensor_buffer;
+        // Process INT32 values...
+}
+```
+
+**Memory Safety & Performance:**
+- Validates buffer existence with `tensor_meta->out_buf_ptrs_host && tensor_meta->out_buf_ptrs_host[i]`
+- Calculates total elements as product of all tensor dimensions
+- Truncates output to first 100 values per tensor to manage file sizes
+- Uses `fprintf()` for efficient CSV writing with proper floating-point precision
 
 ### Common Issues
 

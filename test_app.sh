@@ -6,7 +6,7 @@
 set -e
 
 APP="./deepstream-multi-inference-app"
-SAMPLE_VIDEO="/opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4"
+SAMPLE_VIDEO="/opt/nvidia/deepstream/deepstream-7.1/samples/streams/sample_1080p_h264.mp4"
 
 echo "=== DeepStream Multi-Source Batched Inference Application Test ==="
 echo

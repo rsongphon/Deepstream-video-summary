@@ -170,7 +170,7 @@ tensor_extract_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
                         g_print("\n");
                     }
                     
-                    /* Extract tensor data for this source */
+                    /* Extract raw tensor data for this source */
                     if (ctx->tensor_output_file) {
                         fprintf(ctx->tensor_output_file, 
                                "Source_%d,Batch_%d,Frame_%d,Layer_%d,%s,",
@@ -182,6 +182,102 @@ tensor_extract_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
                         for (guint j = 0; j < layer_info->inferDims.numDims; j++) {
                             fprintf(ctx->tensor_output_file, "%d ", layer_info->inferDims.d[j]);
                         }
+                        
+                        /* Calculate total number of elements */
+                        guint total_elements = 1;
+                        for (guint j = 0; j < layer_info->inferDims.numDims; j++) {
+                            total_elements *= layer_info->inferDims.d[j];
+                        }
+                        
+                        /* Extract raw tensor values using proper buffer pointers */
+                        if (tensor_meta->out_buf_ptrs_host && tensor_meta->out_buf_ptrs_host[i] && total_elements > 0) {
+                            fprintf(ctx->tensor_output_file, ",RAW_DATA:");
+                            
+                            /* Get the actual buffer from host pointers */
+                            void *tensor_buffer = tensor_meta->out_buf_ptrs_host[i];
+                            
+                            /* Determine data type and extract values accordingly */
+                            /* DeepStream uses NvDsInferDataType enum values */
+                            switch (layer_info->dataType) {
+                                case 0: { /* FLOAT */
+                                    float *float_data = (float*)tensor_buffer;
+                                    /* Limit output to first 100 values to prevent huge CSV files */
+                                    guint max_elements = (total_elements > 100) ? 100 : total_elements;
+                                    for (guint k = 0; k < max_elements; k++) {
+                                        fprintf(ctx->tensor_output_file, "%.6f", float_data[k]);
+                                        if (k < max_elements - 1) {
+                                            fprintf(ctx->tensor_output_file, " ");
+                                        }
+                                    }
+                                    if (total_elements > 100) {
+                                        fprintf(ctx->tensor_output_file, "...[truncated_%d_elements]", total_elements);
+                                    }
+                                    break;
+                                }
+                                case 1: { /* HALF/FP16 */
+                                    uint16_t *half_data = (uint16_t*)tensor_buffer;
+                                    guint max_elements = (total_elements > 100) ? 100 : total_elements;
+                                    for (guint k = 0; k < max_elements; k++) {
+                                        fprintf(ctx->tensor_output_file, "%u", half_data[k]);
+                                        if (k < max_elements - 1) {
+                                            fprintf(ctx->tensor_output_file, " ");
+                                        }
+                                    }
+                                    if (total_elements > 100) {
+                                        fprintf(ctx->tensor_output_file, "...[truncated_%d_elements]", total_elements);
+                                    }
+                                    break;
+                                }
+                                case 2: { /* INT8 */
+                                    int8_t *int8_data = (int8_t*)tensor_buffer;
+                                    guint max_elements = (total_elements > 100) ? 100 : total_elements;
+                                    for (guint k = 0; k < max_elements; k++) {
+                                        fprintf(ctx->tensor_output_file, "%d", int8_data[k]);
+                                        if (k < max_elements - 1) {
+                                            fprintf(ctx->tensor_output_file, " ");
+                                        }
+                                    }
+                                    if (total_elements > 100) {
+                                        fprintf(ctx->tensor_output_file, "...[truncated_%d_elements]", total_elements);
+                                    }
+                                    break;
+                                }
+                                case 3: { /* INT32 */
+                                    int32_t *int32_data = (int32_t*)tensor_buffer;
+                                    guint max_elements = (total_elements > 100) ? 100 : total_elements;
+                                    for (guint k = 0; k < max_elements; k++) {
+                                        fprintf(ctx->tensor_output_file, "%d", int32_data[k]);
+                                        if (k < max_elements - 1) {
+                                            fprintf(ctx->tensor_output_file, " ");
+                                        }
+                                    }
+                                    if (total_elements > 100) {
+                                        fprintf(ctx->tensor_output_file, "...[truncated_%d_elements]", total_elements);
+                                    }
+                                    break;
+                                }
+                                default: {
+                                    /* Unknown data type - output as raw bytes with type info */
+                                    fprintf(ctx->tensor_output_file, "[DataType_%d]", layer_info->dataType);
+                                    uint8_t *byte_data = (uint8_t*)tensor_buffer;
+                                    guint byte_size = total_elements * 4; /* Assume 4 bytes per element */
+                                    guint max_bytes = (byte_size > 400) ? 400 : byte_size; /* Limit to 400 bytes */
+                                    for (guint k = 0; k < max_bytes; k++) {
+                                        fprintf(ctx->tensor_output_file, "%02x", byte_data[k]);
+                                        if (k < max_bytes - 1) {
+                                            fprintf(ctx->tensor_output_file, " ");
+                                        }
+                                    }
+                                    if (byte_size > 400) {
+                                        fprintf(ctx->tensor_output_file, "...[truncated_%d_bytes]", byte_size);
+                                    }
+                                    break;
+                                }
+                            }
+                        } else {
+                            fprintf(ctx->tensor_output_file, ",NO_DATA");
+                        }
+                        
                         fprintf(ctx->tensor_output_file, "\n");
                     }
                 }
@@ -925,7 +1021,7 @@ main(int argc, char *argv[])
     ctx->tensor_output_file = fopen("tensor_output.csv", "w");
     if (ctx->tensor_output_file) {
         fprintf(ctx->tensor_output_file, 
-               "Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions\n");
+               "Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions,RawTensorData\n");
     }
     
     /* Create main loop */
