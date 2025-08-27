@@ -1,0 +1,90 @@
+################################################################################
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+################################################################################
+
+# Multi-Source Batched Inference Configuration
+# Optimized for 4-source simultaneous processing with tensor extraction
+
+[property]
+# GPU Configuration
+gpu-id=0
+
+# Model Configuration - Using ResNet18 Traffic Camera Net for demonstration
+# Replace with your custom model paths
+onnx-file=../../../../samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx
+model-engine-file=../../../../samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx_b1_gpu0_int8.engine
+labelfile-path=../../../../samples/models/Primary_Detector/labels.txt
+int8-calib-file=../../../../samples/models/Primary_Detector/cal_trt.bin
+
+# Batch Processing Configuration
+# CRITICAL: batch-size must be 4 for 4-source processing
+batch-size=4
+
+# Network Configuration
+net-scale-factor=0.00392156862745098
+model-color-format=0
+network-mode=1
+num-detected-classes=4
+
+# Processing Configuration
+process-mode=1
+interval=0
+gie-unique-id=1
+
+# Clustering Configuration for Object Detection
+cluster-mode=2
+
+# Tensor Output Configuration
+# Enable tensor metadata extraction
+output-tensor-meta=1
+input-tensor-meta=1
+
+# Performance Optimization Settings
+# Enable asynchronous processing
+maintain-aspect-ratio=0
+
+# Memory Optimization
+# Use unified memory for zero-copy operations
+nvbuf-memory-type=2
+
+[class-attrs-all]
+# Detection Thresholds - Optimized for batch processing
+pre-cluster-threshold=0.2
+topk=20
+nms-iou-threshold=0.5
+
+# Performance-oriented thresholds
+roi-top-offset=0
+roi-bottom-offset=0
+detected-min-w=20
+detected-min-h=20
+detected-max-w=3840
+detected-max-h=2160
+
+################################################################################
+# Configuration Notes:
+#
+# 1. Batch Size: Set to 4 for processing 4 video sources simultaneously
+# 2. Model Engine: Pre-built TensorRT engine for optimal performance
+# 3. Memory Type: Unified memory (type 2) for GPU-CPU data sharing
+# 4. Tensor Output: Enabled for extracting inference results
+# 5. Network Mode: INT8 (mode 1) for maximum inference speed
+#
+# Performance Tips:
+# - Use pre-built .engine files instead of .onnx for production
+# - Adjust batch-size to match your source count (always use 4 for this app)
+# - Enable tensor output for result extraction
+# - Use appropriate thresholds based on your use case
+#
+# To generate optimized TensorRT engine for your batch size:
+# /usr/src/tensorrt/bin/trtexec --onnx=your_model.onnx --batch=4 \
+#   --int8 --workspace=1024 --saveEngine=your_model_b4.engine
+################################################################################

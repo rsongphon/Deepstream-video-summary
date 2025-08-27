@@ -1,0 +1,135 @@
+################################################################################
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+################################################################################
+
+# DeepStream Multi-Source Batched Inference Configuration
+# Optimized for 4-source simultaneous processing with maximum performance
+
+# Application Configuration
+application:
+  enable-perf-measurement: true
+  perf-measurement-interval-sec: 5
+
+# Source Configuration
+# Note: Sources are specified via command line arguments
+# This configuration supports up to 4 sources
+source-list:
+  # Sources will be provided via command line
+  # Example: file:///path/to/video1.mp4;file:///path/to/video2.mp4;...
+  list: ""
+
+# Stream Multiplexer Configuration
+# Critical settings for 4-source batched processing
+streammux:
+  gpu-id: 0
+  batch-size: 4                    # Fixed for 4 sources
+  batched-push-timeout: 40000      # 40ms timeout for batch formation
+  width: 1920                      # Input resolution width
+  height: 1080                     # Input resolution height
+  enable-padding: 0                # Disable padding for performance
+  nvbuf-memory-type: 2            # Unified memory for optimal performance
+  live-source: 0                   # Set to 1 for live sources (RTSP, cameras)
+  
+  # Advanced Performance Settings
+  attach-sys-ts: 1
+  sync-inputs: 0                   # Disable input sync for maximum throughput
+  max-latency: 100000000          # 100ms max latency
+  drop-pipeline-eos: 0
+
+# Primary Inference Engine Configuration
+primary-gie:
+  plugin-type: 0                   # Use nvinfer (not nvinferserver)
+  config-file-path: configs/multi_inference_pgie_config.txt
+  batch-size: 4                    # Must match streammux batch-size
+  
+  # Performance Optimizations
+  interval: 0                      # Process every frame (set to 1-5 to skip frames)
+  gie-unique-id: 1
+  
+  # GPU Memory Configuration
+  gpu-id: 0
+  nvbuf-memory-type: 2
+
+# Tiler Configuration (for display mode)
+tiler:
+  rows: 2
+  columns: 2
+  width: 1280
+  height: 720
+  gpu-id: 0
+  nvbuf-memory-type: 2
+
+# On-Screen Display Configuration (for display mode)
+osd:
+  process-mode: 1                  # GPU mode for better performance
+  display-text: 1                  # Enable text display
+  display-clock: 1
+  display-bbox: 1
+  display-mask: 0
+  gpu-id: 0
+  nvbuf-memory-type: 2
+
+# Sink Configuration
+sink:
+  # Performance settings
+  qos: 0                           # Disable QoS for maximum throughput
+  sync: 0                          # Disable sync for better performance
+  
+  # Display settings (when display is enabled)
+  gpu-id: 0
+  nvbuf-memory-type: 2
+
+# Performance Monitoring Configuration
+perf-measurement:
+  interval-sec: 5
+  mode: 1                          # Detailed performance measurement
+
+################################################################################
+# Performance Optimization Guide:
+#
+# 1. Batch Processing:
+#    - batch-size: Always set to 4 for this application
+#    - batched-push-timeout: 40ms provides good balance of latency vs throughput
+#
+# 2. Memory Management:
+#    - nvbuf-memory-type: 2 (Unified memory) for zero-copy operations
+#    - Consistent memory type across all elements
+#
+# 3. Inference Optimization:
+#    - interval: 0 processes every frame (increase to skip frames)
+#    - Use pre-built TensorRT engines (.engine files)
+#    - Enable tensor output for result extraction
+#
+# 4. Source Optimization:
+#    - Use nvurisrcbin for hardware-accelerated decoding
+#    - Set appropriate file-loop and memory type settings
+#    - Configure drop-on-latency for live sources
+#
+# 5. Display Optimization (when enabled):
+#    - GPU mode for OSD and video conversion
+#    - Appropriate tiler configuration for 4 sources
+#    - Disable sync on sink for better performance
+#
+# Usage Examples:
+#
+# Headless mode (tensor output only):
+# ./deepstream-multi-inference-app --config configs/multi_inference_config.yml \
+#   video1.mp4 video2.mp4 video3.mp4 video4.mp4
+#
+# Display mode:
+# ./deepstream-multi-inference-app --enable-display \
+#   --config configs/multi_inference_config.yml \
+#   video1.mp4 video2.mp4 video3.mp4 video4.mp4
+#
+# RTSP sources:
+# ./deepstream-multi-inference-app \
+#   rtsp://camera1/stream rtsp://camera2/stream rtsp://camera3/stream rtsp://camera4/stream
+################################################################################
