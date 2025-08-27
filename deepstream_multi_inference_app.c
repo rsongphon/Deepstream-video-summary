@@ -128,14 +128,21 @@ tensor_extract_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
         return GST_PAD_PROBE_OK;
     }
     
-    g_print("=== Batch #%d - Tensor Extraction ===\n", ctx->batch_num++);
+    /* Only print batch info every 10 batches to reduce output */
+    gboolean print_details = (ctx->batch_num % 10 == 0);
+    if (print_details) {
+        g_print("=== Batch #%d - Tensor Extraction ===\n", ctx->batch_num);
+    }
+    ctx->batch_num++;
     
     /* Iterate through each frame in the batch */
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
         NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
         guint source_id = frame_meta->source_id;
         
-        g_print("Source %d - Frame %d:\n", source_id, frame_meta->frame_num);
+        if (print_details) {
+            g_print("Source %d - Frame %d:\n", source_id, frame_meta->frame_num);
+        }
         
         /* Extract inference tensor metadata */
         for (l_user = frame_meta->frame_user_meta_list; l_user != NULL; l_user = l_user->next) {
@@ -144,20 +151,24 @@ tensor_extract_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
             if (user_meta->base_meta.meta_type == NVDSINFER_TENSOR_OUTPUT_META) {
                 NvDsInferTensorMeta *tensor_meta = (NvDsInferTensorMeta *)user_meta->user_meta_data;
                 
-                g_print("  Tensor Output Layers: %d\n", tensor_meta->num_output_layers);
+                if (print_details) {
+                    g_print("  Tensor Output Layers: %d\n", tensor_meta->num_output_layers);
+                }
                 
                 /* Process each output layer */
                 for (guint i = 0; i < tensor_meta->num_output_layers; i++) {
                     NvDsInferLayerInfo *layer_info = &tensor_meta->output_layers_info[i];
                     
-                    g_print("    Layer %d: %s\n", i, layer_info->layerName);
-                    g_print("      Data Type: %d\n", layer_info->inferDims.d[0]);
-                    g_print("      Dimensions: ");
-                    
-                    for (guint j = 0; j < layer_info->inferDims.numDims; j++) {
-                        g_print("%d ", layer_info->inferDims.d[j]);
+                    if (print_details) {
+                        g_print("    Layer %d: %s\n", i, layer_info->layerName);
+                        g_print("      Data Type: %d\n", layer_info->inferDims.d[0]);
+                        g_print("      Dimensions: ");
+                        
+                        for (guint j = 0; j < layer_info->inferDims.numDims; j++) {
+                            g_print("%d ", layer_info->inferDims.d[j]);
+                        }
+                        g_print("\n");
                     }
-                    g_print("\n");
                     
                     /* Extract tensor data for this source */
                     if (ctx->tensor_output_file) {
@@ -338,17 +349,60 @@ cb_newpad(GstElement *decodebin, GstPad *decoder_src_pad, gpointer data)
     GstElement *source_bin = (GstElement *)data;
     GstCapsFeatures *features = gst_caps_get_features(caps, 0);
     
+    g_print("New pad added: %s\n", name);
+    
     /* Check for video stream */
     if (!strncmp(name, "video", 5)) {
-        /* Ensure hardware decoder is used */
-        if (gst_caps_features_contains(features, GST_CAPS_FEATURES_NVMM)) {
-            GstPad *bin_ghost_pad = gst_element_get_static_pad(source_bin, "src");
-            if (!gst_ghost_pad_set_target(GST_GHOST_PAD(bin_ghost_pad), decoder_src_pad)) {
-                g_printerr("Failed to link decoder src pad to source bin ghost pad\n");
-            }
-            gst_object_unref(bin_ghost_pad);
+        /* Find the next element to link to in the bin */
+        GstElement *next_element = NULL;
+        GstPad *sink_pad = NULL;
+        
+        /* Check if nvvideoconvert exists in the bin (uridecodebin case) */
+        next_element = gst_bin_get_by_name(GST_BIN(source_bin), "nvvideo-converter");
+        if (next_element) {
+            g_print("Linking to nvvideo-converter\n");
+            sink_pad = gst_element_get_static_pad(next_element, "sink");
         } else {
-            g_printerr("Error: Hardware decoder not selected. Please check your input format.\n");
+            /* nvurisrcbin case - link directly to capsfilter */
+            next_element = gst_bin_get_by_name(GST_BIN(source_bin), "caps-filter");
+            if (next_element) {
+                g_print("Linking directly to caps-filter\n");
+                sink_pad = gst_element_get_static_pad(next_element, "sink");
+            }
+        }
+        
+        if (next_element && sink_pad) {
+            GstPadLinkReturn ret = gst_pad_link(decoder_src_pad, sink_pad);
+            if (ret != GST_PAD_LINK_OK) {
+                g_printerr("Failed to link decoder pad to next element: %d\n", ret);
+            } else {
+                g_print("Successfully linked decoder pad\n");
+                
+                /* For uridecodebin case, also need to link converter to capsfilter */
+                if (gst_bin_get_by_name(GST_BIN(source_bin), "nvvideo-converter")) {
+                    GstElement *converter = gst_bin_get_by_name(GST_BIN(source_bin), "nvvideo-converter");
+                    GstElement *capsfilter = gst_bin_get_by_name(GST_BIN(source_bin), "caps-filter");
+                    
+                    if (converter && capsfilter) {
+                        if (!gst_element_link(converter, capsfilter)) {
+                            g_printerr("Failed to link converter to capsfilter\n");
+                        } else {
+                            g_print("Successfully linked converter to capsfilter\n");
+                        }
+                    }
+                    
+                    if (converter) gst_object_unref(converter);
+                    if (capsfilter) gst_object_unref(capsfilter);
+                }
+            }
+            
+            gst_object_unref(sink_pad);
+        } else {
+            g_printerr("Failed to find next element to link in source bin\n");
+        }
+        
+        if (next_element) {
+            gst_object_unref(next_element);
         }
     }
     
@@ -377,28 +431,81 @@ static GstElement *
 create_source_bin(guint index, const gchar *uri)
 {
     GstElement *bin = NULL, *uri_decode_bin = NULL;
+    GstElement *nvvidconv = NULL, *capsfilter = NULL;
     gchar bin_name[32] = {};
     
     g_snprintf(bin_name, 31, "source-bin-%02d", index);
     bin = gst_bin_new(bin_name);
     
-    /* Use nvurisrcbin for optimal performance */
+    g_print("Creating source bin %d for URI: %s\n", index, uri);
+    
+    /* Try nvurisrcbin first */
     uri_decode_bin = gst_element_factory_make("nvurisrcbin", "uri-decode-bin");
-    if (!uri_decode_bin) {
-        g_printerr("Failed to create nvurisrcbin, falling back to uridecodebin\n");
-        uri_decode_bin = gst_element_factory_make("uridecodebin", "uri-decode-bin");
+    if (uri_decode_bin) {
+        g_print("Using nvurisrcbin for source %d\n", index);
+        /* Configure nvurisrcbin for NVMM memory output */
+        g_object_set(G_OBJECT(uri_decode_bin), 
+                    "file-loop", TRUE, 
+                    "cudadec-memtype", 0,  /* NVMM memory */
+                    NULL);
     } else {
-        /* Configure nvurisrcbin for optimal performance */
-        g_object_set(G_OBJECT(uri_decode_bin), "file-loop", TRUE, NULL);
-        g_object_set(G_OBJECT(uri_decode_bin), "cudadec-memtype", 0, NULL);
+        g_print("nvurisrcbin not available, using uridecodebin for source %d\n", index);
+        uri_decode_bin = gst_element_factory_make("uridecodebin", "uri-decode-bin");
+        
+        /* Add converter for NVMM memory when using uridecodebin */
+        nvvidconv = gst_element_factory_make("nvvideoconvert", "nvvideo-converter");
+        if (!nvvidconv) {
+            g_printerr("Failed to create nvvideoconvert for source %d\n", index);
+            return NULL;
+        }
+        
+        /* Set nvvideoconvert to output NVMM memory */
+        g_object_set(G_OBJECT(nvvidconv), "nvbuf-memory-type", 0, NULL);
     }
     
-    if (!bin || !uri_decode_bin) {
-        g_printerr("Failed to create source bin elements\n");
+    /* Create caps filter to ensure proper format */
+    capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
+    if (!capsfilter) {
+        g_printerr("Failed to create capsfilter for source %d\n", index);
         return NULL;
     }
     
-    g_object_set(G_OBJECT(uri_decode_bin), "uri", uri, NULL);
+    /* Set caps to ensure NVMM memory and compatible format */
+    GstCaps *caps = gst_caps_from_string("video/x-raw(memory:NVMM),format=NV12");
+    g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
+    gst_caps_unref(caps);
+    
+    if (!bin || !uri_decode_bin || !capsfilter) {
+        g_printerr("Failed to create source bin elements for source %d\n", index);
+        return NULL;
+    }
+    
+    /* Convert file path to proper URI format if needed */
+    gchar *proper_uri = NULL;
+    if (g_str_has_prefix(uri, "file://") || g_str_has_prefix(uri, "rtsp://") || 
+        g_str_has_prefix(uri, "http://") || g_str_has_prefix(uri, "https://")) {
+        proper_uri = g_strdup(uri);
+    } else {
+        /* Convert relative/absolute path to file:// URI */
+        if (g_path_is_absolute(uri)) {
+            proper_uri = g_strdup_printf("file://%s", uri);
+        } else {
+            gchar *absolute_path = g_get_current_dir();
+            proper_uri = g_strdup_printf("file://%s/%s", absolute_path, uri);
+            g_free(absolute_path);
+        }
+    }
+    
+    g_print("Converting URI: %s -> %s\n", uri, proper_uri);
+    g_object_set(G_OBJECT(uri_decode_bin), "uri", proper_uri, NULL);
+    g_free(proper_uri);
+    
+    /* Add elements to bin */
+    if (nvvidconv) {
+        gst_bin_add_many(GST_BIN(bin), uri_decode_bin, nvvidconv, capsfilter, NULL);
+    } else {
+        gst_bin_add_many(GST_BIN(bin), uri_decode_bin, capsfilter, NULL);
+    }
     
     /* Connect callbacks */
     g_signal_connect(G_OBJECT(uri_decode_bin), "pad-added",
@@ -406,13 +513,14 @@ create_source_bin(guint index, const gchar *uri)
     g_signal_connect(G_OBJECT(uri_decode_bin), "child-added",
                     G_CALLBACK(decodebin_child_added), bin);
     
-    gst_bin_add(GST_BIN(bin), uri_decode_bin);
-    
     /* Create ghost pad */
-    if (!gst_element_add_pad(bin, gst_ghost_pad_new_no_target("src", GST_PAD_SRC))) {
-        g_printerr("Failed to add ghost pad in source bin\n");
+    GstPad *capsfilter_src_pad = gst_element_get_static_pad(capsfilter, "src");
+    if (!gst_element_add_pad(bin, gst_ghost_pad_new("src", capsfilter_src_pad))) {
+        g_printerr("Failed to add ghost pad in source bin %d\n", index);
+        gst_object_unref(capsfilter_src_pad);
         return NULL;
     }
+    gst_object_unref(capsfilter_src_pad);
     
     return bin;
 }
@@ -449,13 +557,17 @@ setup_pipeline(AppContext *ctx)
     }
     
     /* Configure streammux for 4-source batching */
+    g_print("Configuring nvstreammux...\n");
     g_object_set(G_OBJECT(ctx->streammux),
                 "batch-size", MAX_SOURCES,
                 "width", MUXER_OUTPUT_WIDTH,
                 "height", MUXER_OUTPUT_HEIGHT,
                 "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC,
-                "nvbuf-memory-type", 2, /* Unified memory for optimal performance */
+                "nvbuf-memory-type", 0, /* NVMM memory type for compatibility */
+                "enable-padding", FALSE,
+                "live-source", FALSE,
                 NULL);
+    g_print("nvstreammux configured successfully\n");
     
     /* Configure inference engine */
     g_object_set(G_OBJECT(ctx->pgie),
@@ -573,32 +685,49 @@ setup_pipeline(AppContext *ctx)
     }
     
     /* Create and link source bins */
+    g_print("Creating and linking %d source bins...\n", ctx->config.num_sources);
     for (guint i = 0; i < ctx->config.num_sources; i++) {
+        g_print("Creating source bin %d...\n", i);
         GstElement *source_bin = create_source_bin(i, ctx->config.source_uris[i]);
         if (!source_bin) {
             g_printerr("Failed to create source bin %d\n", i);
             return FALSE;
         }
+        g_print("Source bin %d created successfully\n", i);
         
         gst_bin_add(GST_BIN(ctx->pipeline), source_bin);
+        g_print("Source bin %d added to pipeline\n", i);
         
         /* Link to streammux */
         gchar pad_name[16] = {};
         g_snprintf(pad_name, 15, "sink_%u", i);
         
+        g_print("Requesting pad %s from nvstreammux\n", pad_name);
         GstPad *sinkpad = gst_element_request_pad_simple(ctx->streammux, pad_name);
         GstPad *srcpad = gst_element_get_static_pad(source_bin, "src");
         
-        if (gst_pad_link(srcpad, sinkpad) != GST_PAD_LINK_OK) {
-            g_printerr("Failed to link source bin %d to stream muxer\n", i);
+        if (!sinkpad || !srcpad) {
+            g_printerr("Failed to get pads for source %d linking (sink=%p, src=%p)\n", 
+                      i, sinkpad, srcpad);
+            if (srcpad) gst_object_unref(srcpad);
+            if (sinkpad) gst_object_unref(sinkpad);
+            return FALSE;
+        }
+        
+        g_print("Linking source bin %d to nvstreammux pad %s\n", i, pad_name);
+        GstPadLinkReturn link_ret = gst_pad_link(srcpad, sinkpad);
+        if (link_ret != GST_PAD_LINK_OK) {
+            g_printerr("Failed to link source bin %d to stream muxer (error: %d)\n", i, link_ret);
             gst_object_unref(srcpad);
             gst_object_unref(sinkpad);
             return FALSE;
         }
+        g_print("Source bin %d linked successfully\n", i);
         
         gst_object_unref(srcpad);
         gst_object_unref(sinkpad);
     }
+    g_print("All source bins created and linked successfully\n");
     
     return TRUE;
 }
@@ -760,6 +889,10 @@ main(int argc, char *argv[])
 {
     AppContext *ctx;
     
+    /* Set debug environment for better error reporting */
+    g_setenv("GST_DEBUG", "2", TRUE);
+    g_setenv("GST_DEBUG_NO_COLOR", "1", TRUE);
+    
     /* Initialize GStreamer */
     gst_init(&argc, &argv);
     
@@ -818,8 +951,29 @@ main(int argc, char *argv[])
     
     /* Start pipeline */
     g_print("\nStarting pipeline...\n");
-    if (gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-        g_printerr("Failed to set pipeline to playing state\n");
+    
+    /* Set pipeline to READY state first for debugging */
+    GstStateChangeReturn ret = gst_element_set_state(ctx->pipeline, GST_STATE_READY);
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("Failed to set pipeline to READY state\n");
+        cleanup_and_exit(ctx);
+        return -1;
+    }
+    g_print("Pipeline set to READY state successfully\n");
+    
+    /* Set pipeline to PAUSED state */
+    ret = gst_element_set_state(ctx->pipeline, GST_STATE_PAUSED);
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("Failed to set pipeline to PAUSED state\n");
+        cleanup_and_exit(ctx);
+        return -1;
+    }
+    g_print("Pipeline set to PAUSED state successfully\n");
+    
+    /* Finally set to PLAYING state */
+    ret = gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING);
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("Failed to set pipeline to PLAYING state\n");
         cleanup_and_exit(ctx);
         return -1;
     }

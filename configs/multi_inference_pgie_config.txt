@@ -20,7 +20,7 @@ gpu-id=0
 # Model Configuration - Using ResNet18 Traffic Camera Net for demonstration
 # Replace with your custom model paths
 onnx-file=../../../../samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx
-model-engine-file=../../../../samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx_b1_gpu0_int8.engine
+model-engine-file=../../../../samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx_b4_gpu0_int8.engine
 labelfile-path=../../../../samples/models/Primary_Detector/labels.txt
 int8-calib-file=../../../../samples/models/Primary_Detector/cal_trt.bin
 
@@ -45,7 +45,6 @@ cluster-mode=2
 # Tensor Output Configuration
 # Enable tensor metadata extraction
 output-tensor-meta=1
-input-tensor-meta=1
 
 # Performance Optimization Settings
 # Enable asynchronous processing
@@ -53,7 +52,7 @@ maintain-aspect-ratio=0
 
 # Memory Optimization
 # Use unified memory for zero-copy operations
-nvbuf-memory-type=2
+# nvbuf-memory-type=2
 
 [class-attrs-all]
 # Detection Thresholds - Optimized for batch processing
