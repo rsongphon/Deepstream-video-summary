@@ -1,0 +1,169 @@
+# DeepStream Model Configuration for Multi-Source Batched Inference
+# Simplified configuration with working ResNet-10 model for demonstration
+
+################################################################################
+# Primary GIE (PGIE) Configuration for Multi-Source Processing
+################################################################################
+
+[property]
+# GPU device ID to use for inference (0-based)
+gpu-id=0
+
+# Batch size - CRITICAL: This must match the number of input sources
+# Will be dynamically set by the application based on source count
+batch-size=4
+
+# Use ResNet-18 TrafficCamNet model (comes with DeepStream samples)
+# This will work out of the box without additional model files
+onnx-file=/opt/nvidia/deepstream/deepstream-7.1/samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx
+model-engine-file=models/resnet18_trafficcamnet.engine
+
+# Inference precision
+# 0=FP32, 1=INT8, 2=FP16
+network-mode=0
+
+# Model input configuration
+model-color-format=0
+net-scale-factor=0.0039215697906911373
+num-detected-classes=4
+
+# Processing interval
+# 0=every frame, 1=every other frame, 2=every 3rd frame, etc.
+interval=0
+
+# Unique identifier for this inference engine
+gie-unique-id=1
+
+# Enable output tensor metadata for tensor extraction
+output-tensor-meta=1
+
+# Maintain aspect ratio during scaling
+maintain-aspect-ratio=1
+
+# Performance optimization
+workspace-size=1024
+
+# Clustering algorithm for detected objects
+# 0=None, 1=Simple, 2=DBSCAN, 3=NMS, 4=DBSCAN+NMS
+cluster-mode=2
+
+# Confidence threshold for detections (0.0 to 1.0)
+threshold=0.2
+
+# Labels file for class names
+labelfile-path=/opt/nvidia/deepstream/deepstream-7.1/samples/models/Primary_Detector/labels.txt
+
+################################################################################
+# Memory and Performance Optimization
+################################################################################
+
+# Enable max performance mode
+enable-max-performance=1
+
+# Drop frame interval (0=no dropping)
+drop-frame-interval=0
+
+# Number of extra surfaces for buffering
+num-extra-surfaces=5
+
+# Use CUDA decoder memory type
+cudadec-memtype=2
+
+# Skip frames for performance (0=process all frames)
+skip-frames=0
+
+################################################################################
+# Advanced TensorRT Configuration
+################################################################################
+
+# TensorRT engine creation options
+[trt-config]
+# Use FP16 precision for better performance
+use-fp16=1
+
+# Use INT8 precision (requires calibration dataset)
+use-int8=0
+
+# Workspace size in MB for TensorRT optimization
+workspace-size=1024
+
+# Maximum batch size for TensorRT engine
+max-batch-size=8
+
+# DLA (Deep Learning Accelerator) core to use (-1 for GPU)
+dla-core=-1
+
+# Enable strict type constraints
+use-strict-types=1
+
+# Build engine for current platform
+build-for-current-platform=1
+
+################################################################################
+# Batching and Streaming Configuration  
+################################################################################
+
+# These settings optimize for multi-source streaming
+[streaming-config]
+# Enable batched push timeout
+use-batched-push-timeout=1
+
+# Batch formation timeout in microseconds
+batched-push-timeout=40000
+
+# Live source configuration (0 for file sources, 1 for live streams)
+live-source=0
+
+# Attach system timestamps
+attach-sys-ts=1
+
+################################################################################
+# Debug and Profiling Configuration
+################################################################################
+
+[debug-config]
+# Enable performance measurement
+enable-perf-measurement=1
+
+# Profiling interval in seconds
+perf-measurement-interval-sec=5
+
+# Enable debug output
+enable-debug-output=0
+
+# Enable memory usage tracking
+enable-memory-tracking=1
+
+################################################################################
+# Multi-Model Support (for future expansion)
+################################################################################
+
+# Secondary GIE configuration (optional)
+# [secondary-gie]
+# enable=0
+# gpu-id=0
+# gie-unique-id=2
+# operate-on-gie-id=1
+# operate-on-class-ids=0;2;3
+# model-file=models/secondary_model.onnx
+
+################################################################################
+# Output Configuration
+################################################################################
+
+[output-config]
+# Enable bounding box output
+output-bbox=1
+
+# Enable classification output  
+output-classification=1
+
+# Enable instance mask output (for segmentation models)
+output-instance-mask=0
+
+# Enable tensor output for custom processing
+output-tensor-meta=1
+
+# Tensor output format
+# 0=Raw, 1=KITTI, 2=Native
+tensor-output-format=0

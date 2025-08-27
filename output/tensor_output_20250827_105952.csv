@@ -1,0 +1,3 @@
+Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions,DataType,RawTensorData
+Source_1,Batch_0,Frame_0,Layer_0,output_cov/Sigmoid:0,3,4 34 60,FLOAT,RAW_DATA:0.000005 0.000004 0.000001 0.000000 0.000000
+Source_1,Batch_0,Frame_0,Layer_1,output_bbox/BiasAdd:0,3,16 34 60,FLOAT,RAW_DATA:0.149888 0.418561 0.921859 0.846500 0.837204

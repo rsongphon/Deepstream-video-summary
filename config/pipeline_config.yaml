@@ -1,0 +1,157 @@
+# DeepStream Multi-Source Pipeline Configuration
+# This configuration supports flexible number of input sources
+
+# System Configuration
+system:
+  name: "DeepStream Multi-Source Pipeline"
+  version: "1.0.0"
+  gpu_id: 0
+  enable_perf_measurement: true
+  perf_measurement_interval_sec: 5
+
+# Pipeline Configuration
+pipeline:
+  # Batch size - will be auto-adjusted to match number of sources if different
+  batch_size: 4
+  # Input resolution for all sources (will be scaled to this)
+  width: 1920
+  height: 1080
+  # Display configuration
+  enable_display: true
+  # Performance monitoring
+  enable_performance_monitoring: true
+
+# StreamMux Configuration  
+streammux:
+  # Batch formation timeout in microseconds
+  batched_push_timeout: 40000
+  # Memory type: 0=Default, 1=Pinned, 2=Device, 3=Unified
+  nvbuf_memory_type: 2
+  # Attach system timestamp
+  attach_sys_ts: true
+  # Enable padding (usually false for performance)
+  enable_padding: false
+  # Live source mode (false for file sources)
+  live_source: false
+
+# Primary Inference Engine Configuration
+primary_gie:
+  # Model configuration file path
+  config_file_path: "config/model_config.txt"
+  # Pre-built TensorRT engine file (optional, will be built if not exists)
+  model_engine_file: "models/model.engine"
+  # Unique ID for this inference engine
+  unique_id: 1
+  # Processing interval (0 = every frame, 1 = every other frame, etc.)
+  interval: 0
+  # Enable tensor metadata output
+  output_tensor_meta: true
+  # Enable input tensor metadata
+  input_tensor_meta: false
+
+# Display Configuration
+display:
+  # Tiler configuration for multi-stream display
+  tiler:
+    # Auto-calculate grid based on source count
+    auto_grid: true
+    # Manual grid settings (ignored if auto_grid is true)
+    rows: 2
+    columns: 2
+    # Output resolution
+    width: 1920
+    height: 1080
+  
+  # On-Screen Display (OSD) configuration
+  osd:
+    enable_bbox: true
+    enable_text: true
+    enable_mask: false
+    
+  # Sink configuration
+  sink:
+    type: "nveglglessink"  # or "filesink", "udpsink", etc.
+    sync: false
+    async: false
+
+# Tensor Processing Configuration
+tensor_processor:
+  # Enable tensor extraction and processing
+  enable: true
+  # Output directory for tensor data
+  output_directory: "output"
+  # Export format: "csv", "json", "binary", "numpy"
+  export_format: "csv"
+  # Maximum number of tensor values to log (to prevent huge files)
+  max_tensor_values: 100
+  # Enable detailed logging
+  detailed_logging: false
+  # Layer name filters (empty = all layers)
+  layer_filters: []
+
+# Memory Optimization Configuration
+optimization:
+  # Enable FP16 inference
+  enable_fp16: true
+  # Enable INT8 inference (requires calibration)
+  enable_int8: false
+  # TensorRT workspace size in bytes (1GB default)
+  tensorrt_workspace_size: 1073741824
+  # Number of surfaces per frame
+  num_surfaces_per_frame: 1
+  # Number of extra surfaces for buffering
+  num_extra_surfaces: 5
+  # Buffer pool size
+  buffer_pool_size: 4
+
+# Data Sources Configuration
+# This section will be dynamically populated or overridden via command line
+sources: []
+  # Example source configurations:
+  # - source_id: 0
+  #   uri: "/path/to/video1.mp4"
+  #   is_live: false
+  #   framerate: 30
+  # - source_id: 1
+  #   uri: "rtsp://192.168.1.100:554/stream"
+  #   is_live: true
+  #   framerate: 25
+  # - source_id: 2
+  #   uri: "/dev/video0"
+  #   is_live: true
+  #   framerate: 30
+
+# Monitoring and Logging Configuration
+monitoring:
+  # Enable performance metrics collection
+  enable_metrics: true
+  # Metrics reporting interval in seconds
+  metrics_interval: 30
+  # Log level: "DEBUG", "INFO", "WARN", "ERROR"
+  log_level: "INFO"
+  # Enable frame drop detection
+  enable_frame_drop_detection: true
+  # Enable latency measurement
+  enable_latency_measurement: true
+
+# Advanced Pipeline Features
+advanced:
+  # Enable async processing
+  enable_async_processing: true
+  # Enable GPU direct transfers
+  enable_gpu_direct: true
+  # Enable zero-copy operations where possible
+  enable_zero_copy: true
+  # Pipeline buffering strategy
+  buffering_strategy: "auto"  # "minimal", "optimal", "maximum"
+  
+# Error Handling Configuration
+error_handling:
+  # Action on source failure: "continue", "restart_source", "restart_pipeline", "stop"
+  source_failure_action: "continue"
+  # Maximum number of restart attempts
+  max_restart_attempts: 3
+  # Restart delay in seconds
+  restart_delay_sec: 5
+  # Enable graceful shutdown on critical errors
+  graceful_shutdown: true
