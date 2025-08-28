@@ -1,2 +1,5 @@
 # Exclude ONNX model files
 models/omd_vision_with_preprocessing.onnx
+
+# Exclude Csv files
+output/*.csv
