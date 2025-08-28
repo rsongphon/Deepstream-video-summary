@@ -15,8 +15,9 @@
 
 # Application Configuration
 application:
-  enable-perf-measurement: true
-  perf-measurement-interval-sec: 5
+  # Note: Performance measurement is handled at application level via -p flag
+  # The 'enable-perf-measurement' property does NOT exist on GstNvInfer elements
+  # performance-measurement-interval-sec: 5  # Application-level setting (handled by -p flag)
 
 # Source Configuration
 # Note: Sources are specified via command line arguments

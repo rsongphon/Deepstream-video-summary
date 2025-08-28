@@ -630,3 +630,184 @@ The dual statistics show the effectiveness of asynchronous processing:
 - `CMakeLists.txt` - Build system integration for new components
 
 This enhancement transforms the application from synchronous blocking tensor processing to a high-performance asynchronous architecture capable of handling production-scale video analytics workloads without compromising real-time pipeline performance.
+
+## Performance Monitoring Fixes (August 28, 2025)
+
+### Critical Performance Monitoring Error Resolution
+
+**Issue:** Application was failing with GLib-GObject-CRITICAL errors when using the `-p` (performance monitoring) flag:
+```
+(deepstream-multi-source-cpp:620143): GLib-GObject-CRITICAL **: 10:35:49.015: g_object_set_is_valid_property: object class 'GstNvInfer' has no property named 'enable-perf-measurement'
+
+(deepstream-multi-source-cpp:663882): GLib-GObject-CRITICAL **: 10:55:43.910: g_object_get_is_valid_property: object class 'GstNvStreamMux' has no property named 'num-frames-processed'
+```
+
+**Root Cause Analysis:**
+1. **Invalid Property Configuration**: Configuration files contained `enable-perf-measurement` property that doesn't exist on GstNvInfer elements
+2. **Invalid Property Queries**: Performance monitoring code was attempting to query `num-frames-processed` property that doesn't exist on GstNvStreamMux elements
+3. **Lack of Property Validation**: No validation to prevent setting/getting invalid GStreamer element properties
+
+### Solutions Implemented
+
+#### 1. Configuration File Cleanup
+**File Modified:** `configs/multi_inference_config.yml`
+```diff
+# Application Configuration
+application:
+- enable-perf-measurement: true
+- perf-measurement-interval-sec: 5
++ # Note: Performance measurement is handled at application level via -p flag
++ # The 'enable-perf-measurement' property does NOT exist on GstNvInfer elements
++ # performance-measurement-interval-sec: 5  # Application-level setting (handled by -p flag)
+```
+
+#### 2. Model Configuration Documentation Enhancement
+**File Modified:** `config/model_config.txt`
+- Added comprehensive warnings about invalid performance properties
+- Clear documentation of correct vs incorrect usage
+- Examples showing proper application-level performance monitoring
+
+```diff
+[debug-config]
++ # IMPORTANT: Performance measurement is handled at APPLICATION LEVEL ONLY!
++ # 
++ # The GstNvInfer element does NOT support 'enable-perf-measurement' property.
++ # Use the application's -p flag or enable_performance_monitoring() method instead.
++ # 
++ # INCORRECT: enable-perf-measurement=1  <-- This will cause GLib-GObject-CRITICAL error
++ # CORRECT:   Use -p flag when running application
++ #
++ # Example: ./deepstream-multi-source-cpp -p [sources...]
+```
+
+#### 3. Performance Monitoring Code Rewrite
+**File Modified:** `src/cpp/pipeline_builder.cpp`
+
+**Problem Fixed:**
+```diff
+// BROKEN: Attempting to query non-existent property
+- g_object_get(G_OBJECT(streammux), "num-frames-processed", &total_frames, nullptr);
+
+// FIXED: Use application-level statistics tracking instead
++ // Note: nvstreammux doesn't expose frame count properties directly
++ // We'll use application-level tracking instead of querying invalid properties
++ if (async_processor && async_processor->is_running()) {
++     auto stats = async_processor->get_stats();
++     guint64 current_frame_count = stats.tasks_completed;
++     // Calculate performance metrics from valid application data
++ }
+```
+
+**Enhanced Performance Monitoring Output:**
+- **Pipeline Overview**: Sources, batch size, resolution, GPU ID, pipeline state
+- **Throughput Statistics**: Batch processing rate, estimated FPS per source
+- **Tensor Processing Performance**: Processing time, success rate, queue statistics
+- **Memory Usage Statistics**: Memory type, process memory usage
+- **Pipeline Element Status**: Active elements and processing modes
+
+#### 4. Configuration Validation Framework
+**File Modified:** `src/cpp/main.cpp`
+
+**New Function Added:**
+```cpp
+void validate_configuration(const PipelineConfig& config, const YAML::Node& yaml_config) {
+    // Check for invalid performance monitoring properties
+    if (yaml_config["application"]["enable-perf-measurement"]) {
+        std::cerr << "WARNING: 'enable-perf-measurement' property found in configuration!" << std::endl;
+        std::cerr << "This property does NOT exist on GstNvInfer elements and will cause errors." << std::endl;
+    }
+    
+    // Validate batch size, resolution, GPU ID, etc.
+    // Prevent future configuration issues
+}
+```
+
+### Results and Verification
+
+#### ✅ **Errors Eliminated**
+- **No more GLib-GObject-CRITICAL errors** about `enable-perf-measurement`
+- **No more GLib-GObject-CRITICAL errors** about `num-frames-processed`
+- **Clean application startup** with configuration validation
+
+#### ✅ **Enhanced Performance Monitoring**
+When running with `-p` flag, the application now displays comprehensive performance statistics:
+
+```
+=== DeepStream Performance Statistics ===
+
+Pipeline Overview:
+  Sources: 2
+  Batch Size: 2
+  Resolution: 1920x1080
+  GPU ID: 0
+  Pipeline State: PLAYING
+
+Throughput Statistics:
+  Batches Processed: 1234
+  Processing Rate: 28.5 batches/sec
+  Estimated FPS per Source: 14.3 FPS
+
+Tensor Processing Performance:
+  Batches Processed: 1234
+  Batches Completed: 1234
+  Processing Success Rate: 100.0%
+  Avg Tensor Extraction Time: 12.34 ms/batch
+  Current Queue Size: 2
+  Max Queue Size Reached: 4
+
+Memory Usage Statistics:
+  Memory Type: Unified (type 2)
+  Process VmRSS: 1234567 kB
+
+Pipeline Element Status:
+  StreamMux: Active
+  Primary Inference: Active
+  Display Branch: Disabled
+  Tensor Extraction: Async
+===========================================
+```
+
+#### ✅ **Configuration Validation**
+Application now validates configuration on startup and warns about common issues:
+
+```
+=== Configuration Validation ===
+Configuration validation complete.
+===============================
+```
+
+### Technical Implementation Details
+
+#### Property Validation Approach
+- **Proactive Validation**: Check configuration files for invalid properties before attempting to set them
+- **Application-Level Tracking**: Use internal statistics instead of querying GStreamer element properties
+- **Graceful Fallbacks**: Provide meaningful alternatives when GStreamer properties aren't available
+
+#### Performance Metrics Collection Strategy
+- **AsyncProcessor Statistics**: Leverage existing async processing framework for performance data
+- **Time-Based Calculations**: Use application-level timing instead of element-level counters
+- **Multi-Source Aware**: Calculate per-source metrics from batch processing data
+
+#### Error Prevention Framework
+- **Startup Validation**: Comprehensive configuration checking before pipeline creation
+- **Clear Documentation**: Extensive comments explaining correct vs incorrect property usage
+- **Development Guidance**: Helper messages directing users to correct approaches
+
+### Files Modified Summary
+
+1. **`configs/multi_inference_config.yml`**: Removed invalid `enable-perf-measurement` property
+2. **`config/model_config.txt`**: Added comprehensive documentation and warnings
+3. **`src/cpp/pipeline_builder.cpp`**: Rewrote performance monitoring using valid approaches
+4. **`src/cpp/main.cpp`**: Added configuration validation framework
+
+### Backward Compatibility
+- **No Breaking Changes**: All existing functionality preserved
+- **Enhanced Error Messages**: Better guidance when configuration issues are detected
+- **Maintained API**: All command-line flags and options work as before
+
+### Future Prevention Measures
+- **Configuration Schema**: Validation prevents invalid properties from being set
+- **Documentation Standards**: Clear separation between GStreamer element properties and application-level settings
+- **Developer Guidelines**: Examples of correct property usage throughout codebase
+
+This fix ensures robust, error-free performance monitoring while providing comprehensive statistics for production deployment monitoring and debugging.

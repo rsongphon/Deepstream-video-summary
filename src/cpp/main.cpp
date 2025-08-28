@@ -77,6 +77,48 @@ void print_usage(const char* program_name) {
     std::cout << std::endl;
 }
 
+// Validate configuration for common issues and invalid properties
+void validate_configuration(const PipelineConfig& config, const YAML::Node& yaml_config) {
+    std::cout << "\n=== Configuration Validation ===" << std::endl;
+    
+    // Check for invalid performance monitoring properties
+    if (yaml_config["application"]) {
+        if (yaml_config["application"]["enable-perf-measurement"]) {
+            std::cerr << "WARNING: 'enable-perf-measurement' property found in configuration!" << std::endl;
+            std::cerr << "This property does NOT exist on GstNvInfer elements and will cause errors." << std::endl;
+            std::cerr << "Performance monitoring is handled at application level via -p flag." << std::endl;
+        }
+    }
+    
+    // Check for other common misconfigurations
+    if (yaml_config["primary_gie"]) {
+        if (yaml_config["primary_gie"]["enable-perf-measurement"]) {
+            std::cerr << "ERROR: Found 'enable-perf-measurement' in primary_gie section!" << std::endl;
+            std::cerr << "This will cause GLib-GObject-CRITICAL errors." << std::endl;
+            std::cerr << "Remove this property and use application-level -p flag instead." << std::endl;
+        }
+    }
+    
+    // Validate batch size
+    if (config.batch_size <= 0 || config.batch_size > 128) {
+        std::cerr << "WARNING: Invalid batch size: " << config.batch_size << std::endl;
+        std::cerr << "Recommended range: 1-32 for optimal performance" << std::endl;
+    }
+    
+    // Validate resolution
+    if (config.width <= 0 || config.height <= 0) {
+        std::cerr << "ERROR: Invalid resolution: " << config.width << "x" << config.height << std::endl;
+    }
+    
+    // Validate GPU ID
+    if (config.gpu_id < 0) {
+        std::cerr << "WARNING: Invalid GPU ID: " << config.gpu_id << std::endl;
+    }
+    
+    std::cout << "Configuration validation complete." << std::endl;
+    std::cout << "===============================" << std::endl;
+}
+
 // Load configuration from YAML file
 bool load_config_from_file(const std::string& config_file, PipelineConfig& config) {
     try {
@@ -127,6 +169,9 @@ bool load_config_from_file(const std::string& config_file, PipelineConfig& confi
                 config.model_engine_path = yaml_config["primary_gie"]["model_engine_file"].as<std::string>();
             }
         }
+        
+        // Validate configuration for common issues
+        validate_configuration(config, yaml_config);
         
         std::cout << "Loaded configuration from: " << config_file << std::endl;
         return true;

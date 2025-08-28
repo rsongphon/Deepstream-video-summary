@@ -61,6 +61,9 @@ private:
     
     // Async processing support
     std::shared_ptr<AsyncProcessor> async_processor;
+    
+    // Performance monitoring
+    bool performance_enabled;
 
 public:
     PipelineBuilder();

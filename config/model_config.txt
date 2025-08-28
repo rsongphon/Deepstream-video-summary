@@ -122,17 +122,24 @@ attach-sys-ts=1
 ################################################################################
 
 [debug-config]
-# Enable performance measurement
-enable-perf-measurement=1
+# IMPORTANT: Performance measurement is handled at APPLICATION LEVEL ONLY!
+# 
+# The GstNvInfer element does NOT support 'enable-perf-measurement' property.
+# Use the application's -p flag or enable_performance_monitoring() method instead.
+# 
+# INCORRECT: enable-perf-measurement=1  <-- This will cause GLib-GObject-CRITICAL error
+# CORRECT:   Use -p flag when running application
+#
+# Example: ./deepstream-multi-source-cpp -p [sources...]
 
-# Profiling interval in seconds
-perf-measurement-interval-sec=5
+# Profiling interval in seconds (handled by application via -p flag)
+# perf-measurement-interval-sec=5  # Not used - controlled by application
 
-# Enable debug output
+# Enable debug output (this is a valid nvinfer property)
 enable-debug-output=0
 
-# Enable memory usage tracking
-enable-memory-tracking=1
+# Memory usage tracking is handled by application performance monitoring
+# enable-memory-tracking=1  # Not a valid nvinfer property - handled by application
 
 ################################################################################
 # Multi-Model Support (for future expansion)

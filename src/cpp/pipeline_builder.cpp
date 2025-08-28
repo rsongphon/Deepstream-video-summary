@@ -5,12 +5,15 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <fstream>
+#include <chrono>
 
 PipelineBuilder::PipelineBuilder() 
     : pipeline(nullptr), streammux(nullptr), pgie(nullptr), nvvidconv(nullptr),
       nvosd(nullptr), tiler(nullptr), sink(nullptr), tee(nullptr),
       queue1(nullptr), queue2(nullptr), bus(nullptr), bus_watch_id(0),
-      tensor_callback(nullptr), callback_user_data(nullptr), async_processor(nullptr) {
+      tensor_callback(nullptr), callback_user_data(nullptr), async_processor(nullptr),
+      performance_enabled(false) {
     // Initialize GStreamer
     gst_init(nullptr, nullptr);
 }
@@ -661,27 +664,118 @@ void PipelineBuilder::cleanup() {
 void PipelineBuilder::enable_performance_monitoring(bool enable) {
     if (!pgie) return;
     
-    g_object_set(G_OBJECT(pgie), "enable-perf-measurement", enable, nullptr);
+    // Note: nvinfer element doesn't have 'enable-perf-measurement' property
+    // Performance monitoring is handled at application level
+    performance_enabled = enable;
+    
+    if (enable) {
+        std::cout << "Performance monitoring enabled at application level" << std::endl;
+    } else {
+        std::cout << "Performance monitoring disabled" << std::endl;
+    }
 }
 
 void PipelineBuilder::print_performance_stats() {
-    // Performance stats would be collected and displayed here
-    std::cout << "=== Performance Statistics ===" << std::endl;
-    std::cout << "Pipeline running with " << config.sources.size() << " sources" << std::endl;
-    std::cout << "Batch processing: " << config.batch_size << " streams" << std::endl;
+    std::cout << "\n=== DeepStream Performance Statistics ===" << std::endl;
+    
+    // Pipeline Overview
+    std::cout << "Pipeline Overview:" << std::endl;
+    std::cout << "  Sources: " << config.sources.size() << std::endl;
+    std::cout << "  Batch Size: " << config.batch_size << std::endl;
+    std::cout << "  Resolution: " << config.width << "x" << config.height << std::endl;
+    std::cout << "  GPU ID: " << config.gpu_id << std::endl;
+    
+    // Pipeline State
+    if (pipeline) {
+        GstState current_state;
+        GstStateChangeReturn state_ret = gst_element_get_state(pipeline, &current_state, nullptr, GST_CLOCK_TIME_NONE);
+        std::cout << "  Pipeline State: " << gst_element_state_get_name(current_state) << std::endl;
+    }
+    
+    // FPS and Throughput Statistics
+    std::cout << "\nThroughput Statistics:" << std::endl;
+    
+    // Note: nvstreammux doesn't expose frame count properties directly
+    // We'll use application-level tracking instead of querying invalid properties
+    static auto start_time = std::chrono::steady_clock::now();
+    static guint64 last_frame_count = 0;
+    
+    auto current_time = std::chrono::steady_clock::now();
+    auto elapsed_seconds = std::chrono::duration<double>(current_time - start_time).count();
     
     if (async_processor && async_processor->is_running()) {
         auto stats = async_processor->get_stats();
-        std::cout << "Async Processing Stats:" << std::endl;
-        std::cout << "  Tasks Submitted: " << stats.tasks_submitted << std::endl;
-        std::cout << "  Tasks Completed: " << stats.tasks_completed << std::endl;
-        std::cout << "  Success Rate: " << std::fixed << std::setprecision(1) 
-                  << stats.get_success_rate() << "%" << std::endl;
-        std::cout << "  Avg Processing Time: " << std::fixed << std::setprecision(2) 
-                  << stats.get_avg_processing_time_ms() << "ms" << std::endl;
+        guint64 current_frame_count = stats.tasks_completed;
+        
+        if (elapsed_seconds > 5.0) { // Report every 5+ seconds
+            double frames_per_second = (current_frame_count - last_frame_count) / elapsed_seconds;
+            double fps_per_source = frames_per_second / config.sources.size();
+            
+            std::cout << "  Batches Processed: " << current_frame_count << std::endl;
+            std::cout << "  Processing Rate: " << std::fixed << std::setprecision(1) 
+                     << frames_per_second << " batches/sec" << std::endl;
+            std::cout << "  Estimated FPS per Source: " << std::fixed << std::setprecision(1) 
+                     << fps_per_source << " FPS" << std::endl;
+            
+            // Reset counters
+            start_time = current_time;
+            last_frame_count = current_frame_count;
+        } else {
+            std::cout << "  Batches Processed: " << current_frame_count << std::endl;
+            std::cout << "  Processing Rate: Calculating..." << std::endl;
+        }
+    } else {
+        std::cout << "  Performance tracking: Available with async processing only" << std::endl;
     }
     
-    std::cout << "===============================" << std::endl;
+    // Tensor Processing Performance
+    std::cout << "\nTensor Processing Performance:" << std::endl;
+    if (async_processor && async_processor->is_running()) {
+        auto stats = async_processor->get_stats();
+        std::cout << "  Batches Processed: " << stats.tasks_submitted << std::endl;
+        std::cout << "  Batches Completed: " << stats.tasks_completed << std::endl;
+        std::cout << "  Processing Success Rate: " << std::fixed << std::setprecision(1) 
+                  << stats.get_success_rate() << "%" << std::endl;
+        std::cout << "  Avg Tensor Extraction Time: " << std::fixed << std::setprecision(2) 
+                  << stats.get_avg_processing_time_ms() << " ms/batch" << std::endl;
+        std::cout << "  Current Queue Size: " << stats.current_queue_size << std::endl;
+        std::cout << "  Max Queue Size Reached: " << stats.max_queue_size << std::endl;
+    } else {
+        std::cout << "  Async Processing: Disabled (using synchronous processing)" << std::endl;
+    }
+    
+    // Memory Usage Statistics
+    std::cout << "\nMemory Usage Statistics:" << std::endl;
+    
+    // Get GPU memory info if available
+    std::cout << "  Memory Type: ";
+    switch(config.nvbuf_memory_type) {
+        case 0: std::cout << "Default"; break;
+        case 1: std::cout << "Pinned"; break; 
+        case 2: std::cout << "Unified"; break;
+        case 3: std::cout << "Device"; break;
+        default: std::cout << "Unknown"; break;
+    }
+    std::cout << " (type " << config.nvbuf_memory_type << ")" << std::endl;
+    
+    // System memory usage (simplified)
+    std::ifstream proc_status("/proc/self/status");
+    std::string line;
+    while (std::getline(proc_status, line)) {
+        if (line.find("VmRSS:") == 0) {
+            std::cout << "  Process " << line << std::endl;
+            break;
+        }
+    }
+    
+    // Pipeline Element Status
+    std::cout << "\nPipeline Element Status:" << std::endl;
+    std::cout << "  StreamMux: " << (streammux ? "Active" : "Inactive") << std::endl;
+    std::cout << "  Primary Inference: " << (pgie ? "Active" : "Inactive") << std::endl;
+    std::cout << "  Display Branch: " << (config.enable_display ? "Enabled" : "Disabled") << std::endl;
+    std::cout << "  Tensor Extraction: " << (async_processor ? "Async" : "Sync") << std::endl;
+    
+    std::cout << "===========================================" << std::endl;
 }
 
 // ============================================================================
