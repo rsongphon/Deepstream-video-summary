@@ -1,14 +1,16 @@
 #include "pipeline_builder.h"
+#include "async_processor.h"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 
 PipelineBuilder::PipelineBuilder() 
     : pipeline(nullptr), streammux(nullptr), pgie(nullptr), nvvidconv(nullptr),
       nvosd(nullptr), tiler(nullptr), sink(nullptr), tee(nullptr),
       queue1(nullptr), queue2(nullptr), bus(nullptr), bus_watch_id(0),
-      tensor_callback(nullptr), callback_user_data(nullptr) {
+      tensor_callback(nullptr), callback_user_data(nullptr), async_processor(nullptr) {
     // Initialize GStreamer
     gst_init(nullptr, nullptr);
 }
@@ -548,8 +550,51 @@ gboolean PipelineBuilder::bus_call(GstBus *bus, GstMessage *msg, gpointer data) 
 GstPadProbeReturn PipelineBuilder::tensor_extract_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
     PipelineBuilder* builder = static_cast<PipelineBuilder*>(user_data);
     
-    // Call custom tensor callback if set
-    if (builder->tensor_callback) {
+    // Priority 1: Try async processing if enabled
+    if (builder->async_processor && builder->async_processor->is_running()) {
+        GstBuffer *buffer = static_cast<GstBuffer*>(info->data);
+        if (buffer) {
+            // Process tensor metadata asynchronously
+            NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buffer);
+            if (batch_meta) {
+                // Submit async tasks for each frame with tensor metadata
+                NvDsMetaList* l_frame = batch_meta->frame_meta_list;
+                while (l_frame != nullptr) {
+                    NvDsFrameMeta* frame_meta = (NvDsFrameMeta*)(l_frame->data);
+                    
+                    // Look for tensor metadata in frame's user metadata list
+                    NvDsMetaList* l_user_meta = frame_meta->frame_user_meta_list;
+                    while (l_user_meta != nullptr) {
+                        NvDsUserMeta* user_meta = (NvDsUserMeta*)(l_user_meta->data);
+                        
+                        if (user_meta && user_meta->base_meta.meta_type == NVDSINFER_TENSOR_OUTPUT_META) {
+                            void* tensor_meta_ptr = user_meta->user_meta_data;
+                            
+                            // Task submitted to async processor
+                            
+                            // Submit async task (use void* to avoid header conflicts)
+                            auto future = builder->async_processor->submit_tensor_task(
+                                tensor_meta_ptr,
+                                frame_meta->source_id,
+                                0,  // Use 0 as default batch ID (or we could use frame_meta->batch_id if available)
+                                frame_meta->frame_num,
+                                frame_meta->ntp_timestamp
+                            );
+                            
+                            // Note: We don't wait for the future here to maintain non-blocking behavior
+                            // The async processor handles the actual processing in background threads
+                        }
+                        
+                        l_user_meta = l_user_meta->next;
+                    }
+                    
+                    l_frame = l_frame->next;
+                }
+            }
+        }
+    }
+    // Priority 2: Fall back to legacy callback if async not available
+    else if (builder->tensor_callback) {
         builder->tensor_callback(pad, info, builder->callback_user_data);
     }
     
@@ -624,5 +669,51 @@ void PipelineBuilder::print_performance_stats() {
     std::cout << "=== Performance Statistics ===" << std::endl;
     std::cout << "Pipeline running with " << config.sources.size() << " sources" << std::endl;
     std::cout << "Batch processing: " << config.batch_size << " streams" << std::endl;
+    
+    if (async_processor && async_processor->is_running()) {
+        auto stats = async_processor->get_stats();
+        std::cout << "Async Processing Stats:" << std::endl;
+        std::cout << "  Tasks Submitted: " << stats.tasks_submitted << std::endl;
+        std::cout << "  Tasks Completed: " << stats.tasks_completed << std::endl;
+        std::cout << "  Success Rate: " << std::fixed << std::setprecision(1) 
+                  << stats.get_success_rate() << "%" << std::endl;
+        std::cout << "  Avg Processing Time: " << std::fixed << std::setprecision(2) 
+                  << stats.get_avg_processing_time_ms() << "ms" << std::endl;
+    }
+    
     std::cout << "===============================" << std::endl;
+}
+
+// ============================================================================
+// Async Processing Integration
+// ============================================================================
+
+bool PipelineBuilder::enable_async_processing(std::shared_ptr<AsyncProcessor> processor) {
+    if (!processor) {
+        std::cerr << "[PipelineBuilder] ERROR: Null async processor provided" << std::endl;
+        return false;
+    }
+    
+    async_processor = processor;
+    
+    if (!async_processor->start()) {
+        std::cerr << "[PipelineBuilder] ERROR: Failed to start async processor" << std::endl;
+        async_processor.reset();
+        return false;
+    }
+    
+    std::cout << "[PipelineBuilder] Async processing enabled successfully" << std::endl;
+    return true;
+}
+
+void PipelineBuilder::disable_async_processing() {
+    if (async_processor) {
+        async_processor->stop();
+        async_processor.reset();
+        std::cout << "[PipelineBuilder] Async processing disabled" << std::endl;
+    }
+}
+
+bool PipelineBuilder::is_async_processing_enabled() const {
+    return async_processor && async_processor->is_running();
 }

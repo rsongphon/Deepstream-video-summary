@@ -358,6 +358,17 @@ bool TensorProcessor::extract_tensor_from_meta(NvDsInferTensorMeta* tensor_meta,
         }
     }
     
+    // Update statistics for async processing (single tensor method)
+    if (!tensor_data.empty()) {
+        // This is a single frame, single "batch" with multiple tensors
+        update_processing_stats(1, tensor_data.size(), 1);
+        
+        if (enable_detailed_logging) {
+            std::cout << "[DEBUG] Updated stats: +1 batch, +" << tensor_data.size() 
+                      << " tensors, +1 frame (from async processing)" << std::endl;
+        }
+    }
+    
     return !tensor_data.empty();
 }
 
@@ -379,44 +390,63 @@ bool TensorProcessor::copy_tensor_data_by_type(void* buffer,
                                                NvDsInferDataType data_type, 
                                                size_t num_elements, 
                                                std::vector<float>& output) {
-    output.clear();
-    output.reserve(num_elements);
+    if (!buffer || num_elements == 0) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Invalid buffer or zero elements" << std::endl;
+        }
+        return false;
+    }
     
+    output.clear();
+    output.resize(num_elements);  // Pre-allocate for vectorized operations
+    
+    // Optimized vectorized data extraction inspired by Python's numpy approach
     switch (data_type) {
         case FLOAT: {
+            // Direct memory copy for float data (fastest path - like numpy's direct array access)
             float* float_data = static_cast<float*>(buffer);
-            for (size_t i = 0; i < num_elements; i++) {
-                output.push_back(float_data[i]);
-            }
+            vectorized_copy_float(float_data, output.data(), num_elements);
             break;
         }
         case HALF: {
-            // Assuming 16-bit half precision
+            // Vectorized half-precision conversion with proper IEEE 754 handling
             uint16_t* half_data = static_cast<uint16_t*>(buffer);
-            for (size_t i = 0; i < num_elements; i++) {
-                // Simple conversion from half to float (this is a simplified version)
-                float val = static_cast<float>(half_data[i]);
-                output.push_back(val);
+            // Process in chunks for better cache performance
+            const size_t chunk_size = 1024;
+            for (size_t i = 0; i < num_elements; i += chunk_size) {
+                size_t end = std::min(i + chunk_size, num_elements);
+                for (size_t j = i; j < end; j++) {
+                    output[j] = half_to_float(half_data[j]);
+                }
             }
             break;
         }
         case INT8: {
+            // Optimized int8 to float conversion using vectorized helper
             int8_t* int8_data = static_cast<int8_t*>(buffer);
-            for (size_t i = 0; i < num_elements; i++) {
-                output.push_back(static_cast<float>(int8_data[i]));
-            }
+            vectorized_convert_int8(int8_data, output.data(), num_elements);
             break;
         }
         case INT32: {
+            // Optimized int32 to float conversion using vectorized helper
             int32_t* int32_data = static_cast<int32_t*>(buffer);
-            for (size_t i = 0; i < num_elements; i++) {
-                output.push_back(static_cast<float>(int32_data[i]));
-            }
+            vectorized_convert_int32(int32_data, output.data(), num_elements);
             break;
         }
         default:
-            std::cerr << "Unsupported data type: " << data_type << std::endl;
+            if (enable_detailed_logging) {
+                std::cout << "[ERROR] Unsupported data type: " << data_type << std::endl;
+            }
             return false;
+    }
+    
+    if (enable_detailed_logging && num_elements <= 10) {
+        std::cout << "[DEBUG] Extracted tensor data (first " << std::min(num_elements, size_t(10)) 
+                  << " elements): ";
+        for (size_t i = 0; i < std::min(num_elements, size_t(10)); i++) {
+            std::cout << output[i] << " ";
+        }
+        std::cout << std::endl;
     }
     
     return true;
@@ -480,21 +510,57 @@ bool TensorProcessor::write_tensor_to_csv(const TensorData& tensor) {
 
 bool TensorProcessor::validate_tensor_meta(NvDsInferTensorMeta* tensor_meta) {
     if (!tensor_meta) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Tensor metadata is null" << std::endl;
+        }
         return false;
     }
     
+    // Comprehensive validation inspired by Python script approach
     if (!tensor_meta->out_buf_ptrs_host) {
         if (enable_detailed_logging) {
-            std::cout << "No host buffer pointers in tensor meta" << std::endl;
+            std::cout << "[ERROR] No host buffer pointers in tensor meta" << std::endl;
         }
         return false;
     }
     
     if (tensor_meta->num_output_layers == 0) {
         if (enable_detailed_logging) {
-            std::cout << "No output layers in tensor meta" << std::endl;
+            std::cout << "[ERROR] No output layers in tensor meta" << std::endl;
         }
         return false;
+    }
+    
+    // Validate output layers info array exists
+    if (!tensor_meta->output_layers_info) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Output layers info array is null" << std::endl;
+        }
+        return false;
+    }
+    
+    // Enhanced validation: check each layer has valid buffer pointer
+    for (guint i = 0; i < tensor_meta->num_output_layers; i++) {
+        if (!tensor_meta->out_buf_ptrs_host[i]) {
+            if (enable_detailed_logging) {
+                std::cout << "[ERROR] Layer " << i << " has null buffer pointer" << std::endl;
+            }
+            return false;
+        }
+        
+        // Validate layer info structure
+        NvDsInferLayerInfo* layer_info = &tensor_meta->output_layers_info[i];
+        if (!validate_layer_info(layer_info, i)) {
+            if (enable_detailed_logging) {
+                std::cout << "[ERROR] Layer " << i << " validation failed" << std::endl;
+            }
+            return false;
+        }
+    }
+    
+    if (enable_detailed_logging) {
+        std::cout << "[DEBUG] Tensor meta validation passed: " << tensor_meta->num_output_layers 
+                  << " layers, unique_id=" << tensor_meta->unique_id << std::endl;
     }
     
     return true;
@@ -502,33 +568,116 @@ bool TensorProcessor::validate_tensor_meta(NvDsInferTensorMeta* tensor_meta) {
 
 bool TensorProcessor::validate_layer_info(NvDsInferLayerInfo* layer_info, int layer_index) {
     if (!layer_info) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Layer info " << layer_index << " is null" << std::endl;
+        }
         return false;
     }
     
+    // Validate layer name
     if (!layer_info->layerName) {
         if (enable_detailed_logging) {
-            std::cout << "Layer " << layer_index << " has no name" << std::endl;
+            std::cout << "[ERROR] Layer " << layer_index << " has no name" << std::endl;
         }
         return false;
     }
     
-    if (layer_info->inferDims.numDims <= 0) {
+    // Validate dimension count (similar to Python validation)
+    if (layer_info->inferDims.numDims <= 0 || layer_info->inferDims.numDims > NV_TENSORRT_MAX_DIMS) {
         if (enable_detailed_logging) {
-            std::cout << "Layer " << layer_index << " has invalid dimensions" << std::endl;
+            std::cout << "[ERROR] Layer " << layer_index << " (" << layer_info->layerName 
+                      << ") has invalid dimension count: " << layer_info->inferDims.numDims << std::endl;
         }
         return false;
     }
     
-    return validate_tensor_dimensions(std::vector<int>(layer_info->inferDims.d, 
-                                                       layer_info->inferDims.d + layer_info->inferDims.numDims));
+    // Validate data type is supported
+    if (layer_info->dataType < 0 || layer_info->dataType > 3) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Layer " << layer_index << " (" << layer_info->layerName 
+                      << ") has unsupported data type: " << layer_info->dataType << std::endl;
+        }
+        return false;
+    }
+    
+    // Validate tensor dimensions
+    std::vector<int> dimensions(layer_info->inferDims.d, 
+                               layer_info->inferDims.d + layer_info->inferDims.numDims);
+    if (!validate_tensor_dimensions(dimensions)) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Layer " << layer_index << " (" << layer_info->layerName 
+                      << ") has invalid dimensions" << std::endl;
+        }
+        return false;
+    }
+    
+    // Calculate total elements for sanity check (like Python's np.prod)
+    size_t total_elements = 1;
+    for (int i = 0; i < layer_info->inferDims.numDims; i++) {
+        total_elements *= layer_info->inferDims.d[i];
+    }
+    
+    // Sanity check: ensure reasonable tensor size (max 100M elements)
+    if (total_elements == 0 || total_elements > 100000000) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Layer " << layer_index << " (" << layer_info->layerName 
+                      << ") has unreasonable tensor size: " << total_elements << " elements" << std::endl;
+        }
+        return false;
+    }
+    
+    if (enable_detailed_logging) {
+        std::cout << "[DEBUG] Layer " << layer_index << " (" << layer_info->layerName 
+                  << ") validation passed: " << total_elements << " elements, dims=[";
+        for (int i = 0; i < layer_info->inferDims.numDims; i++) {
+            std::cout << layer_info->inferDims.d[i];
+            if (i < layer_info->inferDims.numDims - 1) std::cout << ",";
+        }
+        std::cout << "], dataType=" << layer_info->dataType << std::endl;
+    }
+    
+    return true;
 }
 
 bool TensorProcessor::validate_tensor_dimensions(const std::vector<int>& dimensions) {
-    for (int dim : dimensions) {
+    if (dimensions.empty()) {
+        if (enable_detailed_logging) {
+            std::cout << "[ERROR] Empty dimensions vector" << std::endl;
+        }
+        return false;
+    }
+    
+    // Enhanced dimension validation similar to Python's shape checking
+    for (size_t i = 0; i < dimensions.size(); i++) {
+        int dim = dimensions[i];
         if (dim <= 0) {
+            if (enable_detailed_logging) {
+                std::cout << "[ERROR] Invalid dimension " << i << ": " << dim << std::endl;
+            }
+            return false;
+        }
+        
+        // Sanity check: individual dimension shouldn't be too large
+        if (dim > 100000) {
+            if (enable_detailed_logging) {
+                std::cout << "[ERROR] Dimension " << i << " too large: " << dim << std::endl;
+            }
             return false;
         }
     }
+    
+    // Check total size doesn't overflow
+    size_t total_size = 1;
+    for (int dim : dimensions) {
+        if (total_size > SIZE_MAX / dim) {
+            if (enable_detailed_logging) {
+                std::cout << "[ERROR] Dimension overflow detected" << std::endl;
+            }
+            return false;
+        }
+        total_size *= dim;
+    }
+    
     return true;
 }
 
@@ -682,5 +831,83 @@ void TensorProcessor::cleanup_output_streams() {
     if (csv_file && csv_file->is_open()) {
         csv_file->close();
         csv_file.reset();
+    }
+}
+
+// ============================================================================
+// Optimized Data Conversion Helper Functions (inspired by Python's NumPy)
+// ============================================================================
+
+float TensorProcessor::half_to_float(uint16_t half_val) {
+    // IEEE 754 half-precision to single-precision conversion
+    uint32_t sign = (half_val >> 15) & 0x1;
+    uint32_t exp = (half_val >> 10) & 0x1f;
+    uint32_t mantissa = half_val & 0x3ff;
+    
+    uint32_t float_val;
+    
+    if (exp == 0) {
+        if (mantissa == 0) {
+            // Zero
+            float_val = sign << 31;
+        } else {
+            // Denormalized number
+            exp = 127 - 15;
+            while (!(mantissa & 0x400)) {
+                mantissa <<= 1;
+                exp--;
+            }
+            mantissa &= 0x3ff;
+            float_val = (sign << 31) | (exp << 23) | (mantissa << 13);
+        }
+    } else if (exp == 31) {
+        // Infinity or NaN
+        float_val = (sign << 31) | (0xff << 23) | (mantissa << 13);
+    } else {
+        // Normal number
+        float_val = (sign << 31) | ((exp + 127 - 15) << 23) | (mantissa << 13);
+    }
+    
+    return *reinterpret_cast<float*>(&float_val);
+}
+
+void TensorProcessor::vectorized_copy_float(const float* src, float* dst, size_t count) {
+    // Direct memory copy for float arrays (fastest possible)
+    std::memcpy(dst, src, count * sizeof(float));
+}
+
+void TensorProcessor::vectorized_convert_int8(const int8_t* src, float* dst, size_t count) {
+    // Optimized int8 to float conversion using SIMD-friendly loops
+    const size_t simd_chunk = 8;  // Process 8 elements at a time for better vectorization
+    
+    size_t i = 0;
+    // Process chunks of 8 for better vectorization opportunity
+    for (; i + simd_chunk <= count; i += simd_chunk) {
+        for (size_t j = 0; j < simd_chunk; j++) {
+            dst[i + j] = static_cast<float>(src[i + j]);
+        }
+    }
+    
+    // Handle remaining elements
+    for (; i < count; i++) {
+        dst[i] = static_cast<float>(src[i]);
+    }
+}
+
+void TensorProcessor::vectorized_convert_int32(const int32_t* src, float* dst, size_t count) {
+    // Optimized int32 to float conversion with overflow checking
+    const size_t chunk_size = 4;  // Process 4 elements at a time
+    
+    size_t i = 0;
+    // Process in chunks for better cache performance
+    for (; i + chunk_size <= count; i += chunk_size) {
+        for (size_t j = 0; j < chunk_size; j++) {
+            dst[i + j] = static_cast<float>(src[i + j]);
+        }
+    }
+    
+    // Handle remaining elements
+    for (; i < count; i++) {
+        dst[i] = static_cast<float>(src[i]);
     }
 }

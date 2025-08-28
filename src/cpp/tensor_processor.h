@@ -7,12 +7,20 @@
 #include <map>
 #include <memory>
 #include <fstream>
+#include <algorithm>
+#include <cstring>
+#include <cstdint>
 
 #include "gstnvdsmeta.h"
 #include "gstnvdsinfer.h"
 #include "nvdsmeta.h"
 #include "nvbufsurface.h"
 #include "nvdsinfer_context.h"
+
+// Enhanced validation constants
+#define NV_TENSORRT_MAX_DIMS 8
+#define MAX_TENSOR_ELEMENTS 100000000
+#define MAX_DIMENSION_SIZE 100000
 
 // Tensor data structure
 struct TensorData {
@@ -157,6 +165,12 @@ private:
     // Debug and logging helpers
     void log_tensor_info(const TensorData& tensor);
     void log_processing_error(const std::string& error_msg);
+    
+    // Optimized data conversion helpers
+    static float half_to_float(uint16_t half_val);
+    static void vectorized_copy_float(const float* src, float* dst, size_t count);
+    static void vectorized_convert_int8(const int8_t* src, float* dst, size_t count);
+    static void vectorized_convert_int32(const int32_t* src, float* dst, size_t count);
 };
 
 #endif // TENSOR_PROCESSOR_H

@@ -6,14 +6,17 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <fstream>
+#include <iomanip>
 #include <yaml-cpp/yaml.h>
 
 #include "pipeline_builder.h"
 #include "tensor_processor.h"
+#include "async_processor.h"
 
 // Global variables for signal handling
 std::unique_ptr<PipelineBuilder> g_pipeline;
-std::unique_ptr<TensorProcessor> g_tensor_processor;
+std::shared_ptr<TensorProcessor> g_tensor_processor;
+std::shared_ptr<AsyncProcessor> g_async_processor;
 GMainLoop *g_main_loop = nullptr;
 bool g_interrupted = false;
 
@@ -21,6 +24,14 @@ bool g_interrupted = false;
 void signal_handler(int signum) {
     std::cout << "\nReceived signal " << signum << ", shutting down gracefully..." << std::endl;
     g_interrupted = true;
+    
+    // Stop async processor first to finish pending tasks, but don't reset it yet
+    // so we can print statistics later in main()
+    if (g_async_processor) {
+        std::cout << "Stopping async processor..." << std::endl;
+        g_async_processor->stop(3000); // 3 second timeout
+        // Don't reset here - let main() handle cleanup so we can print stats
+    }
     
     if (g_main_loop) {
         g_main_loop_quit(g_main_loop);
@@ -202,7 +213,7 @@ int main(int argc, char *argv[]) {
     std::string output_dir = "output";
     ExportFormat export_format = ExportFormat::CSV;
     int max_tensor_values = 100;
-    bool detailed_logging = false;
+    bool detailed_logging = false;  // Disable verbose debugging, issue is fixed
     
     // Command line options
     std::string config_file = "";
@@ -338,7 +349,7 @@ int main(int argc, char *argv[]) {
     
     try {
         // Initialize tensor processor
-        g_tensor_processor = std::make_unique<TensorProcessor>();
+        g_tensor_processor = std::make_shared<TensorProcessor>();
         if (!g_tensor_processor->initialize(output_dir, export_format)) {
             std::cerr << "Failed to initialize tensor processor" << std::endl;
             return 1;
@@ -348,6 +359,22 @@ int main(int argc, char *argv[]) {
         g_tensor_processor->set_detailed_logging(detailed_logging);
         g_tensor_processor->enable_tensor_export(true);
         
+        // Initialize async processor for non-blocking tensor processing
+        g_async_processor = std::make_shared<AsyncProcessor>(
+            4,    // Number of worker threads (can be configurable)
+            1000  // Max queue size
+        );
+        
+        if (!g_async_processor->initialize(g_tensor_processor)) {
+            std::cerr << "Failed to initialize async processor" << std::endl;
+            return 1;
+        }
+        
+        // Configure async processor
+        g_async_processor->configure(detailed_logging, true); // Enable performance tracking
+        
+        std::cout << "Async processor initialized with 4 threads" << std::endl;
+        
         // Initialize pipeline
         g_pipeline = std::make_unique<PipelineBuilder>();
         if (!g_pipeline->initialize(config)) {
@@ -355,8 +382,14 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         
-        // Set tensor extraction callback
-        g_pipeline->set_tensor_extraction_callback(tensor_extraction_callback, g_tensor_processor.get());
+        // Enable async processing (replaces legacy callback)
+        if (!g_pipeline->enable_async_processing(g_async_processor)) {
+            std::cerr << "Failed to enable async processing, falling back to synchronous processing" << std::endl;
+            // Fall back to legacy callback
+            g_pipeline->set_tensor_extraction_callback(tensor_extraction_callback, g_tensor_processor.get());
+        } else {
+            std::cout << "Async tensor processing enabled" << std::endl;
+        }
         
         // Create and start pipeline
         if (!g_pipeline->create_pipeline()) {
@@ -403,7 +436,25 @@ int main(int argc, char *argv[]) {
         std::cout << "\n=== Final Statistics ===" << std::endl;
         g_tensor_processor->print_statistics();
         
+        // Also print async processor statistics if available
+        if (g_async_processor) {
+            auto async_stats = g_async_processor->get_stats();
+            std::cout << "\n=== Async Processing Statistics ===" << std::endl;
+            std::cout << "Tasks Submitted: " << async_stats.tasks_submitted << std::endl;
+            std::cout << "Tasks Completed: " << async_stats.tasks_completed << std::endl;
+            std::cout << "Tasks Failed: " << async_stats.tasks_failed << std::endl;
+            std::cout << "Success Rate: " << std::fixed << std::setprecision(2) 
+                      << async_stats.get_success_rate() << "%" << std::endl;
+            std::cout << "Average Processing Time: " << std::fixed << std::setprecision(2) 
+                      << async_stats.get_avg_processing_time_ms() << " ms" << std::endl;
+            std::cout << "Current Queue Size: " << async_stats.current_queue_size << std::endl;
+            std::cout << "Max Queue Size Reached: " << async_stats.max_queue_size << std::endl;
+            std::cout << "========================================" << std::endl;
+        }
+        
+        // Clean up resources in proper order
         g_main_loop_unref(g_main_loop);
+        g_async_processor.reset();  // Reset async processor after printing stats
         g_tensor_processor.reset();
         g_pipeline.reset();
         

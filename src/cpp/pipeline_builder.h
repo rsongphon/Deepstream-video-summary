@@ -11,6 +11,9 @@
 #include "nvdsmeta.h"
 #include "nvbufsurface.h"
 
+// Forward declarations
+class AsyncProcessor;
+
 struct SourceConfig {
     int source_id;
     std::string uri;
@@ -51,10 +54,13 @@ private:
     PipelineConfig config;
     std::vector<GstElement*> source_bins;
     
-    // Callback function type for tensor extraction
+    // Callback function type for tensor extraction (legacy)
     typedef void (*TensorExtractCallback)(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
     TensorExtractCallback tensor_callback;
     gpointer callback_user_data;
+    
+    // Async processing support
+    std::shared_ptr<AsyncProcessor> async_processor;
 
 public:
     PipelineBuilder();
@@ -79,8 +85,13 @@ public:
     bool pause_pipeline();
     GstStateChangeReturn get_pipeline_state();
     
-    // Tensor extraction
+    // Tensor extraction (legacy callback)
     void set_tensor_extraction_callback(TensorExtractCallback callback, gpointer user_data);
+    
+    // Async tensor processing
+    bool enable_async_processing(std::shared_ptr<AsyncProcessor> processor);
+    void disable_async_processing();
+    bool is_async_processing_enabled() const;
     
     // Utility functions
     static gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer data);
