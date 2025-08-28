@@ -8,7 +8,8 @@
 
 TensorProcessor::TensorProcessor() 
     : export_format(ExportFormat::CSV), enable_export(true), 
-      max_tensor_values_to_log(100), enable_detailed_logging(false) {
+      max_tensor_values_to_log(100), enable_detailed_logging(false),
+      global_batch_num(0) {
     // Initialize statistics
     memset(&stats, 0, sizeof(stats));
     stats.start_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -71,7 +72,8 @@ bool TensorProcessor::write_csv_header() {
         return false;
     }
     
-    *csv_file << "Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions,DataType,RawTensorData" << std::endl;
+    // CRITICAL FIX: Match exact C version CSV header format (no DataType column)
+    *csv_file << "Source,Batch,Frame,Layer,LayerName,NumDims,Dimensions,RawTensorData" << std::endl;
     csv_file->flush();
     
     return true;
@@ -145,24 +147,29 @@ bool TensorProcessor::process_batch(NvDsBatchMeta* batch_meta, std::vector<Tenso
         return false;
     }
     
+    // CRITICAL FIX: Increment global batch counter once per batch (like C version)
+    global_batch_num++;
+    
     if (enable_detailed_logging) {
-        std::cout << "[DEBUG] Processing batch with " << batch_meta->num_frames_in_batch << " frames" << std::endl;
+        std::cout << "[DEBUG] Processing batch " << global_batch_num 
+                  << " with " << batch_meta->num_frames_in_batch << " frames" << std::endl;
     }
     
     NvDsMetaList* l_frame = batch_meta->frame_meta_list;
-    int batch_id = 0;
     int frames_with_inference = 0;
     
+    // Process all frames in the batch - they all share the same batch number
     while (l_frame != nullptr) {
         NvDsFrameMeta* frame_meta = (NvDsFrameMeta*)(l_frame->data);
         
         if (enable_detailed_logging) {
             std::cout << "[DEBUG] Processing frame " << frame_meta->frame_num 
-                      << " from source " << frame_meta->source_id << std::endl;
+                      << " from source " << frame_meta->source_id 
+                      << " (batch " << global_batch_num << ")" << std::endl;
         }
         
         TensorBatchData batch_tensor_data;
-        batch_tensor_data.batch_id = batch_id;
+        batch_tensor_data.batch_id = global_batch_num;  // All frames use same batch number
         batch_tensor_data.timestamp = frame_meta->ntp_timestamp;
         
         // Count user metadata
@@ -187,7 +194,7 @@ bool TensorProcessor::process_batch(NvDsBatchMeta* batch_meta, std::vector<Tenso
                     std::vector<TensorData> frame_tensors;
                     if (extract_tensor_from_meta(tensor_meta, 
                                                 frame_meta->source_id, 
-                                                batch_id, 
+                                                global_batch_num,  // Use global batch number
                                                 frame_meta->frame_num,
                                                 frame_tensors)) {
                         batch_tensor_data.tensors.insert(batch_tensor_data.tensors.end(),
@@ -212,18 +219,18 @@ bool TensorProcessor::process_batch(NvDsBatchMeta* batch_meta, std::vector<Tenso
         if (!batch_tensor_data.tensors.empty()) {
             processed_data.push_back(batch_tensor_data);
             
-            if (enable_export) {
-                export_to_csv({batch_tensor_data});
-            }
+            // OPTIMIZATION: Remove redundant CSV export - now done directly in tensor extraction
+            // CSV writing is now handled directly in extract_tensor_from_meta for better performance
         }
         
-        batch_id++;
+        // Move to next frame (do NOT increment batch_id - all frames share same batch number)
         l_frame = l_frame->next;
     }
     
     if (enable_detailed_logging) {
-        std::cout << "[DEBUG] Batch processing complete: " << frames_with_inference 
-                  << " frames with inference out of " << batch_id << " total frames" << std::endl;
+        std::cout << "[DEBUG] Batch " << global_batch_num << " processing complete: " 
+                  << frames_with_inference << " frames with inference out of " 
+                  << batch_meta->num_frames_in_batch << " total frames" << std::endl;
     }
     
     return !processed_data.empty();
@@ -267,12 +274,82 @@ bool TensorProcessor::extract_tensor_from_meta(NvDsInferTensorMeta* tensor_meta,
             continue;
         }
         
-        // Extract raw tensor data
+        // CRITICAL FIX: Write tensor data directly to CSV like C version (no intermediate storage)
         void* tensor_buffer = tensor_meta->out_buf_ptrs_host[i];
-        if (tensor_buffer && extract_raw_tensor_data(tensor_buffer, 
-                                                     layer_info->dataType,
-                                                     tensor.total_elements,
-                                                     tensor.raw_data)) {
+        if (tensor_buffer && csv_file && csv_file->is_open()) {
+            // Write basic tensor info directly
+            *csv_file << "Source_" << source_id << ","
+                      << "Batch_" << batch_id << ","
+                      << "Frame_" << frame_number << ","
+                      << "Layer_" << i << ","
+                      << layer_info->layerName << ","
+                      << layer_info->inferDims.numDims << ",";
+                      
+            // Write dimensions
+            for (int d = 0; d < layer_info->inferDims.numDims; d++) {
+                *csv_file << layer_info->inferDims.d[d];
+                if (d < layer_info->inferDims.numDims - 1) *csv_file << " ";
+            }
+            *csv_file << " ,RAW_DATA:";
+            
+            // Write raw tensor data directly based on data type (like C version)
+            guint max_elements = (tensor.total_elements > 100) ? 100 : tensor.total_elements;
+            
+            switch (layer_info->dataType) {
+                case 0: { // FLOAT
+                    float* float_data = (float*)tensor_buffer;
+                    for (guint k = 0; k < max_elements; k++) {
+                        *csv_file << std::fixed << std::setprecision(6) << float_data[k];
+                        if (k < max_elements - 1) *csv_file << " ";
+                    }
+                    break;
+                }
+                case 1: { // HALF/FP16
+                    uint16_t* half_data = (uint16_t*)tensor_buffer;
+                    for (guint k = 0; k < max_elements; k++) {
+                        *csv_file << half_data[k];
+                        if (k < max_elements - 1) *csv_file << " ";
+                    }
+                    break;
+                }
+                case 2: { // INT8
+                    int8_t* int8_data = (int8_t*)tensor_buffer;
+                    for (guint k = 0; k < max_elements; k++) {
+                        *csv_file << (int)int8_data[k];
+                        if (k < max_elements - 1) *csv_file << " ";
+                    }
+                    break;
+                }
+                case 3: { // INT32
+                    int32_t* int32_data = (int32_t*)tensor_buffer;
+                    for (guint k = 0; k < max_elements; k++) {
+                        *csv_file << int32_data[k];
+                        if (k < max_elements - 1) *csv_file << " ";
+                    }
+                    break;
+                }
+                default: {
+                    *csv_file << "[DataType_" << layer_info->dataType << "]";
+                    uint8_t* byte_data = (uint8_t*)tensor_buffer;
+                    guint byte_size = tensor.total_elements * 4;
+                    guint max_bytes = (byte_size > 400) ? 400 : byte_size;
+                    for (guint k = 0; k < max_bytes; k++) {
+                        *csv_file << std::hex << (int)byte_data[k] << std::dec;
+                        if (k < max_bytes - 1) *csv_file << " ";
+                    }
+                    break;
+                }
+            }
+            
+            if (tensor.total_elements > 100) {
+                *csv_file << "...[truncated_" << tensor.total_elements << "_elements]";
+            }
+            
+            *csv_file << std::endl;
+            csv_file->flush();
+            
+            // Add to tensor_data for tracking (but with empty raw_data to save memory)
+            tensor.raw_data.clear();  // Don't store raw data anymore
             tensor_data.push_back(tensor);
             
             if (enable_detailed_logging) {
@@ -380,10 +457,9 @@ bool TensorProcessor::write_tensor_to_csv(const TensorData& tensor) {
         *csv_file << tensor.dimensions[i];
         if (i < tensor.num_dims - 1) *csv_file << " ";
     }
-    *csv_file << ",";
+    *csv_file << " ,";  // Add space after dimensions like C version
     
-    // Write data type
-    *csv_file << data_type_to_string(tensor.data_type) << ",";
+    // CRITICAL FIX: Remove DataType column to match C version format exactly
     
     // Write raw tensor data
     *csv_file << "RAW_DATA:";

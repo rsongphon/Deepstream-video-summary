@@ -311,8 +311,12 @@ bool PipelineBuilder::setup_tensor_extraction() {
     tee = gst_element_factory_make("tee", "inference-tee");
     queue1 = gst_element_factory_make("queue", "tensor-queue");
     
+    // CRITICAL FIX: Add fakesink to complete tensor extraction branch
+    GstElement* fakesink_tensor = gst_element_factory_make("fakesink", "fakesink-tensor");
+    
     if (!check_element_creation(tee, "tee") ||
-        !check_element_creation(queue1, "queue")) {
+        !check_element_creation(queue1, "queue") ||
+        !check_element_creation(fakesink_tensor, "fakesink-tensor")) {
         return false;
     }
     
@@ -322,16 +326,35 @@ bool PipelineBuilder::setup_tensor_extraction() {
                  "max-size-bytes", 0,
                  "max-size-time", 0,
                  nullptr);
+                 
+    // Configure fakesink properties
+    g_object_set(G_OBJECT(fakesink_tensor),
+                 "sync", FALSE,
+                 "async", FALSE,
+                 nullptr);
     
-    gst_bin_add_many(GST_BIN(pipeline), tee, queue1, nullptr);
+    gst_bin_add_many(GST_BIN(pipeline), tee, queue1, fakesink_tensor, nullptr);
     
-    // Add probe to queue1 for tensor extraction
-    GstPad* probe_pad = gst_element_get_static_pad(queue1, "src");
-    gst_pad_add_probe(probe_pad, GST_PAD_PROBE_TYPE_BUFFER,
-                     tensor_extract_probe, this, nullptr);
-    gst_object_unref(probe_pad);
+    // Link tensor extraction branch: queue1 -> fakesink
+    if (!gst_element_link(queue1, fakesink_tensor)) {
+        std::cerr << "Error: Failed to link tensor queue to fakesink" << std::endl;
+        return false;
+    }
     
-    std::cout << "Setup tensor extraction probe" << std::endl;
+    // CRITICAL FIX: Add probe to PGIE src pad for tensor extraction (like C version)
+    // This ensures we get raw tensor metadata directly from inference engine
+    GstPad* tensor_probe_pad = gst_element_get_static_pad(pgie, "src");
+    if (tensor_probe_pad) {
+        gst_pad_add_probe(tensor_probe_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                         tensor_extract_probe, this, nullptr);
+        gst_object_unref(tensor_probe_pad);
+        std::cout << "Setup tensor extraction probe on PGIE src pad" << std::endl;
+    } else {
+        std::cerr << "Error: Failed to get PGIE src pad for tensor extraction" << std::endl;
+        return false;
+    }
+    
+    std::cout << "Setup tensor extraction infrastructure complete" << std::endl;
     return true;
 }
 

@@ -70,6 +70,9 @@ private:
     int max_tensor_values_to_log;
     bool enable_detailed_logging;
     std::vector<std::string> layer_name_filter;
+    
+    // Batch tracking (like C version batch_num)
+    guint global_batch_num;
 
 public:
     
